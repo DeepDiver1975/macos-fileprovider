@@ -16,15 +16,28 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .library(name: "OwnCloudCore", targets: ["OwnCloudCore"])
+        .library(name: "OwnCloudCore", targets: ["OwnCloudCore"]),
+        // The Mac-only FileProvider adapter layer over OwnCloudCore. Its
+        // FileProvider-framework code is behind `#if canImport(FileProvider)`,
+        // so the package still builds on Linux (the framework simply isn't there
+        // and the file compiles to nothing) — AC-2's backend-contract tier.
+        .library(name: "FileProviderSupport", targets: ["FileProviderSupport"])
     ],
     targets: [
         .target(
             name: "OwnCloudCore"
         ),
+        .target(
+            name: "FileProviderSupport",
+            dependencies: ["OwnCloudCore"]
+        ),
         .testTarget(
             name: "OwnCloudCoreTests",
             dependencies: ["OwnCloudCore"]
+        ),
+        .testTarget(
+            name: "FileProviderSupportTests",
+            dependencies: ["FileProviderSupport"]
         )
     ]
 )
