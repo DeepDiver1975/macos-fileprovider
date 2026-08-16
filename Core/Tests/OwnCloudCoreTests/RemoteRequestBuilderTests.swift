@@ -100,4 +100,47 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertTrue(req.hasBody)
         XCTAssertEqual(req.headers["Content-Type"], "application/json")
     }
+
+    // MARK: - Enumeration requests (Phase 3)
+
+    func testWebDAVEnumerateIsPropfindDepthOne() {
+        let req = dav.enumerate(path: "/Photos")
+        XCTAssertEqual(req.method, .propfind)
+        XCTAssertEqual(req.url, URL(string: "https://cloud.test/remote.php/dav/files/admin/Photos"))
+        // Depth:1 lists the immediate children of the container.
+        XCTAssertEqual(req.headers["Depth"], "1")
+        XCTAssertEqual(req.headers["Content-Type"], "application/xml")
+        XCTAssertTrue(req.hasBody)
+    }
+
+    func testWebDAVEnumerateBodyRequestsTheParsedProperties() {
+        let req = dav.enumerate(path: "/")
+        let body = String(data: req.jsonBody ?? Data(), encoding: .utf8) ?? ""
+        // The PROPFIND must ask for exactly the props WebDAVMultiStatusParser reads.
+        XCTAssertTrue(body.contains("<d:propfind"))
+        for prop in ["d:getetag", "d:getcontentlength", "d:getcontenttype", "d:getlastmodified", "d:resourcetype"] {
+            XCTAssertTrue(body.contains(prop), "missing \(prop)")
+        }
+        for prop in ["oc:id", "oc:size", "oc:permissions"] {
+            XCTAssertTrue(body.contains(prop), "missing \(prop)")
+        }
+        XCTAssertTrue(body.contains("xmlns:oc=\"http://owncloud.org/ns\""))
+    }
+
+    func testGraphEnumerateFirstPageIsGetOnRootChildren() {
+        let req = graph.enumerate(driveID: driveID, cursor: nil)
+        XCTAssertEqual(req.method, .get)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/root/children"))
+        XCTAssertFalse(req.hasBody)
+    }
+
+    func testGraphEnumerateWithCursorFollowsThePageToken() {
+        let req = graph.enumerate(driveID: driveID, cursor: PageCursor(rawValue: "abc123"))
+        XCTAssertEqual(req.method, .get)
+        // The cursor is the opaque $token carried by nextLink/deltaLink.
+        XCTAssertEqual(
+            req.url,
+            URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/root/delta?$token=abc123")
+        )
+    }
 }

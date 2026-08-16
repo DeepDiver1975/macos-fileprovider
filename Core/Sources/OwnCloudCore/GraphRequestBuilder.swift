@@ -37,6 +37,21 @@ public struct GraphRequestBuilder {
         RemoteRequest(method: .delete, url: itemURL(driveID: driveID, itemID: itemID))
     }
 
+    /// List the drive root for enumeration (Phase 3). The first page is a plain
+    /// `/root/children` GET; subsequent pages follow the opaque `$token` the
+    /// server returned in `nextLink`/`deltaLink` (carried here as a ``PageCursor``)
+    /// against the `/root/delta` endpoint, which also drives change tracking.
+    public func enumerate(driveID: String, cursor: PageCursor?) -> RemoteRequest {
+        let path: String
+        if let cursor {
+            path = "/graph/v1.0/drives/\(driveID)/root/delta?$token=\(cursor.rawValue)"
+        } else {
+            path = "/graph/v1.0/drives/\(driveID)/root/children"
+        }
+        let url = URL(string: baseURL.absoluteString + path) ?? baseURL
+        return RemoteRequest(method: .get, url: url)
+    }
+
     /// POST a folder driveItem to the parent's `/children` collection.
     public func createFolder(driveID: String, parentID: String, name: String) -> RemoteRequest {
         let body: [String: Any] = [

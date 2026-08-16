@@ -52,4 +52,38 @@ public struct WebDAVRequestBuilder {
         ]
         return RemoteRequest(method: .move, url: url(for: fromPath), headers: headers)
     }
+
+    /// PROPFIND `Depth: 1` to list the immediate children of the container at
+    /// `path` (Phase 3 enumeration). The request body asks for exactly the
+    /// properties `WebDAVMultiStatusParser` reads back — requesting fewer would
+    /// leave the parsed item incomplete, requesting more just wastes bytes.
+    public func enumerate(path: String) -> RemoteRequest {
+        RemoteRequest(
+            method: .propfind,
+            url: url(for: path),
+            headers: ["Depth": "1", "Content-Type": "application/xml"],
+            hasBody: true,
+            jsonBody: Data(Self.propfindBody.utf8)
+        )
+    }
+
+    /// The `PROPFIND` request body. Namespaced props mirror the parser's
+    /// `(namespace, localName)` switch: DAV core plus the ownCloud extension
+    /// props (`oc:id`, `oc:size`, `oc:permissions`, `oc:favorite`).
+    static let propfindBody = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+      <d:prop>
+        <d:resourcetype/>
+        <d:getetag/>
+        <d:getcontentlength/>
+        <d:getcontenttype/>
+        <d:getlastmodified/>
+        <oc:id/>
+        <oc:size/>
+        <oc:permissions/>
+        <oc:favorite/>
+      </d:prop>
+    </d:propfind>
+    """
 }
