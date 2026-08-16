@@ -29,8 +29,17 @@ jobs:
       - name: swift test (core package)
         working-directory: Core
         run: swift test --enable-code-coverage
-      # xcodebuild test for the app + extension targets is added once the
-      # .xcodeproj is generated on the Mac (progress.md Task 1.1 / 1.4).
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate the Xcode project
+        run: xcodegen generate
+      - name: xcodebuild test (app scheme runs the OwnCloudCore suite)
+        run: |
+          xcodebuild test \
+            -project OwnCloudFileProvider.xcodeproj \
+            -scheme App \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
 
   backend-contract:
     name: Backend contract (${{ matrix.backend }})

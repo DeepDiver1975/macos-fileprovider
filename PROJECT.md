@@ -1,9 +1,24 @@
 # Xcode project structure
 
-This repository does **not** commit a generated `.xcodeproj`. The project must be
-assembled on a Mac in Xcode (SPM has no product type that emits an `.appex`, so
-the two extensions cannot be SPM targets — see `progress.md` Task 1.1). This file
-records the intended structure so the project can be reconstructed identically.
+This repository does **not** commit a generated `.xcodeproj`. The project is
+generated from the committed **`project.yml`** (XcodeGen) — SPM has no product
+type that emits an `.appex`, so the two extensions cannot be SPM targets (see
+`progress.md` Task 1.1). This file records the intended structure; `project.yml`
+is the machine-readable source of truth.
+
+## Generating and building
+
+```sh
+brew install xcodegen        # one-time
+xcodegen generate            # writes OwnCloudFileProvider.xcodeproj from project.yml
+xcodebuild -project OwnCloudFileProvider.xcodeproj -scheme App \
+  -destination 'platform=macOS' build         # builds app + both .appex
+xcodebuild test -project OwnCloudFileProvider.xcodeproj -scheme App \
+  -destination 'platform=macOS'               # runs the OwnCloudCore suite
+```
+
+The generated `.xcodeproj` is git-ignored; regenerate it after editing
+`project.yml`.
 
 ## Targets
 
@@ -49,10 +64,14 @@ Docker on `ubuntu-latest` in CI (see `progress.md` AC-2, backend-contract tier).
 - `xcodebuild test` covers XCTest targets inside the Xcode project (added on the
   Mac once the project exists).
 
-## Why no committed project file
+## Why a generated project
 
-No `xcodegen`/`tuist` is available in the loop environment, and a hand-written
-`.pbxproj` is fragile and unreviewable. The reviewable artifacts — sources,
-Info.plists, entitlements — are committed; the `.xcodeproj` is generated from
-them on the Mac. If a project generator is later adopted, its manifest
-(`project.yml` for XcodeGen) should be committed here and this note updated.
+A hand-written `.pbxproj` is fragile and unreviewable. Instead the reviewable
+artifacts — sources, Info.plists, entitlements, and the `project.yml` manifest —
+are committed; the `.xcodeproj` is generated from them with XcodeGen. This keeps
+project changes as readable diffs to `project.yml`.
+
+Verified on Xcode 16.4 / macOS 26: `xcodegen generate` + `xcodebuild build`
+produces the app bundle embedding both `.appex` extensions in `Contents/PlugIns`,
+and `embeddedBinaryValidationUtility` confirms the two extension-point
+identifiers (`com.apple.fileprovider-nonui`, `com.apple.fileprovider-actionsui`).

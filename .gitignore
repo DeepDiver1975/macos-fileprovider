@@ -9,6 +9,10 @@ xcuserdata/
 build/
 DerivedData/
 
+## Generated Xcode project — regenerate with `xcodegen generate` from project.yml
+## (the manifest is the committed source of truth; see PROJECT.md).
+*.xcodeproj/
+
 ## macOS
 .DS_Store
 
