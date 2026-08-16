@@ -139,11 +139,22 @@ servers. The scenarios themselves are authored during the loop-engineering proce
   accepts, and the extension actually loading in the runner's session. None of this is
   documented by Apple; it is make-or-break for AC-2's end-to-end tier. If it fails, that
   tier moves to a self-hosted Mac and AC-2 is rewritten accordingly.
+  * **Loop status — fully blocked (no headless artifact):** this is by definition an
+    experiment on a live GitHub-hosted macOS runner (domain add + enumerate, app in
+    `/Applications`, a signing identity the runner accepts). It cannot be reduced to a unit
+    test. The end-to-end job in `.github/workflows/ci.yml` carries a placeholder step that
+    is replaced with the spike's real body once it is run on a Mac.
 * [ ] **Task 6.1:** settle the AC-3 mechanism: determine whether Apple Developer signing
   credentials (certificate, provisioning profile carrying
   `com.apple.developer.fileprovider.testing-mode`, team ID) can be provided as CI
   secrets. Record the decision here; implement the other mechanism as the documented
   fallback either way.
+  * **Loop status — fully blocked (an org/human decision, no headless artifact):** whether
+    a paid Apple Developer team's signing credentials can be committed as CI secrets is not
+    something the loop can settle — it needs the team and a policy call. The AC-3 *fallback*
+    (bounded polling with documented per-assertion timeouts) is the path specified for
+    contributors without those credentials, and is what the harness will use until this is
+    recorded.
 * [~] **Task 6.2:** backend fixtures — `test/fixtures/classic/docker-compose.yml`
   (`owncloud/server:11.0.0` + MariaDB + Redis) and `test/fixtures/ocis/docker-compose.yml`,
   plus the CI script that starts the same oCIS version from the `darwin-arm64` release
@@ -158,7 +169,7 @@ servers. The scenarios themselves are authored during the loop-engineering proce
     `darwin-arm64` binary for the runner). YAML parses; the script is executable. **Blocked:**
     actually starting the stacks needs Docker (unavailable headlessly here); the self-signed
     cert trust step (`security add-trusted-cert`) needs a Mac.
-* [ ] **Task 6.3:** the `AcceptanceSupport` harness: a `BackendAdmin` protocol with OCS
+* [~] **Task 6.3:** the `AcceptanceSupport` harness: a `BackendAdmin` protocol with OCS
   and Graph implementations (create user, upload content, assert remote state), a domain
   lifecycle helper (`add(_:)`, `removeAllDomains(completionHandler:)`,
   `getUserVisibleURL(for:completionHandler:)`, `signalEnumerator(for:completionHandler:)`,
@@ -166,6 +177,14 @@ servers. The scenarios themselves are authored during the loop-engineering proce
   plays the role the client suite's `test/gui/shared/steps` does. **Open question for
   this task:** how a test process outside the extension reads whether an item is
   materialised — determine this on the Mac rather than assuming a resource key.
+  * **Loop status:** the `BackendAdmin` provisioning half is done test-first (6 tests
+    green): `OCSProvisioningRequestBuilder` (Classic OCS API — `POST /ocs/v1.php/cloud/users`
+    form-encoded, `OCS-APIRequest: true`, user delete) and `GraphProvisioningRequestBuilder`
+    (oCIS Graph — `POST /graph/v1.0/users` JSON, user delete). This provisions fixtures
+    through each backend's own admin API (AC-1), reusing the Phase 4 `RemoteRequest` value
+    type. **Blocked:** the domain lifecycle helper wraps `NSFileProviderManager` (Mac-only),
+    and the materialisation-state observer is the task's open question — both need a Mac.
+    Content upload for fixtures reuses the Phase 4 WebDAV/Graph builders already in place.
 * [~] **Task 6.4:** the Gherkin layer — `.feature` files kept close to the client's
   wording so they stay diff-comparable, a small Gherkin parser/runner in the test target,
   and the step library mapping steps onto Task 6.3's harness. Port the first scenarios
@@ -187,8 +206,14 @@ servers. The scenarios themselves are authored during the loop-engineering proce
     **Blocked:** the `xcodebuild test` step (needs the `.xcodeproj`, Task 1.1), the
     `--filter BackendContract` suite (needs the live-backend contract tests, Task 6.3), and
     the end-to-end harness body (Task 6.0 spike) are stubbed/commented pending the Mac.
-* [ ] **Task 6.6:** flake policy — a `@quarantine` tag, the ten-green rule of AC-3, and a
+* [~] **Task 6.6:** flake policy — a `@quarantine` tag, the ten-green rule of AC-3, and a
   nightly re-run of quarantined scenarios so they cannot be forgotten.
+  * **Loop status:** the tag-selection logic is done test-first (`ScenarioSelection` — 4
+    tests green): `mainSuite(_:)` excludes `@quarantine`, `quarantined(_:)` takes only them
+    (the nightly re-run), and `forBackend(_:_:)` applies the AC-1 `@classicOnly`/`@ocisOnly`
+    tags. **Blocked:** wiring the quarantine re-run into the nightly workflow and enforcing
+    the ten-green rule both need the scenarios actually running (Mac + Docker), so they land
+    with Task 6.3's harness.
 
 ---
 
@@ -303,5 +328,6 @@ Not present in the client suites, and specific to this platform:
 * *2026-08-16*: Phase 3 enumeration core landed test-first (40 tests green). Task 3.1: `FileProviderItemDescription` value type + `ItemIdentifier`/`ItemCapabilities` and WebDAV/Graph mappers, keeping the FileProvider framework out of the Linux core. Task 3.2 (`[~]`): `SyncAnchor`/`PageCursor`/`EnumerationPage`/`Paginator` for paged accumulation + anchor capture. Task 3.3 (`[~]`): `ChangeSet` diffing (listing-vs-listing for WebDAV, delta-page split for oCIS). The `NSFileProviderEnumerator`/`ChangeObserver` conformances remain Mac-only adapters over this logic; the enumeration acceptance gate stays open pending Phase 6.
 * *2026-08-16*: Phase 4 content core landed test-first (57 tests green). `RemoteRequest`/`HTTPMethod` + `PathEncoding`, `WebDAVRequestBuilder` (GET fetch, PUT create, MKCOL, PUT modify w/ `If-Match`, DELETE, MOVE w/ `Destination`+`Overwrite: F`) and `GraphRequestBuilder` (GET/PUT `/content`, DELETE item, POST `/children` folder w/ `conflictBehavior: fail`) cover the routed request each replicated handler issues (Tasks 4.1/4.2/4.4). `UploadQueue` (Task 4.3, `[x]`) does change detection by version + dedup + FIFO. The `NSFileProviderReplicatedExtension` handler conformances, temp-URL streaming hand-off, and conflict mechanism remain Mac-only adapters; the content acceptance gate stays open pending Phase 6.
 * *2026-08-16*: Phase 5 sign-in core landed test-first (65 tests green). Task 5.1 (`[~]`): `BackendDetector` (oCIS via OIDC discovery, Classic via installed `status.php`, OIDC wins ties, `nil` when neither), `AccountDescriptor` (stable `domainIdentifier`, `user@host` display name), `DomainRemovalChoice` (default preserves downloaded data). Task 5.2 (`[~]`): UI extension `ActionViewController` scaffold. Task 5.3 deferred — it is the Phase 6 acceptance suite (Mac + Docker + signing gated). The `NSFileProviderManager`/domain and AppKit UI conformances remain Mac-only; the lifecycle acceptance gate stays open pending Phase 6.
+* *2026-08-16*: Phase 6 completed to its headless boundary (82 tests green). Task 6.6 (`[~]`): `ScenarioSelection` test-first (4 tests) — `mainSuite`/`quarantined` partition on `@quarantine` and `forBackend` applies AC-1's `@classicOnly`/`@ocisOnly`. Task 6.3 (`[~]`): the `BackendAdmin` provisioning half test-first (6 tests) — `OCSProvisioningRequestBuilder` (Classic OCS API, form-encoded, `OCS-APIRequest` header) and `GraphProvisioningRequestBuilder` (oCIS Graph users JSON), provisioning fixtures via each backend's own admin API (AC-1) and reusing the Phase 4 `RemoteRequest`. Tasks 6.0 and 6.1 marked fully blocked with notes: 6.0 is by definition a live-runner spike (no unit test possible), and 6.1 is an org/human decision on committing signing credentials — the AC-3 bounded-polling fallback covers the interim. Every Phase 6 task is now either `[~]` (headless artifact done, Mac/Docker/signing remainder documented) or blocked with an explicit reason; no task is silently unaddressed.
 * *2026-08-16*: Phase 6 headless-verifiable artifacts landed (72 tests green). Task 6.2 (`[~]`): Docker fixtures for both backends (`owncloud/server:11.0.0` + MariaDB + Redis with health checks; `owncloud/ocis:8.2.0`), a single pinned-version source `versions.env` (AC-7), and `start-ocis-macos.sh` that downloads the same oCIS version as a `darwin-arm64` binary for the runner. Task 6.4 (`[~]`): `GherkinParser` (feature/background/scenario/outline, tags, `And`/`But`, examples + `expanded()`) test-first with 8 tests green, plus `test/features/enumeration.feature` (4 `tst_syncing`-seeded scenarios, verified to parse). Task 6.5 (`[~]`): `.github/workflows/ci.yml` wiring AC-2's three tiers — unit (`swift test`), backend contract (both backends in Docker on `ubuntu-latest`, matrix, AC-6 log upload on failure), and end-to-end (oCIS `darwin-arm64` binary on `macos-15`, nightly + `full-ci` label) — third-party actions pinned to full commit SHAs. Blocked remainder is Mac/Docker/signing: the `xcodebuild test` step, the live backend-contract suite (Task 6.3), the end-to-end harness (Task 6.0 spike), and the Gherkin step library/runner.
 * *2026-08-16*: Added the Acceptance Criteria section, per-phase acceptance gates for Phases 3–5, Phase 6 for the acceptance suite and CI, and an appendix seeding the scenarios from the desktop client's `tst_syncing` and `tst_vfs` suites. Nothing is complete until it passes against both ownCloud Classic v11 (`owncloud/server:11.0.0`) and oCIS, run from Docker fixtures. GitHub-hosted macOS runners turn out to have no container runtime at all, so the end-to-end tier runs oCIS from its `darwin-arm64` release binary and Classic v11 keeps no end-to-end tier in CI — it runs locally against Docker until a Docker-capable macOS runner exists. That gap is recorded in AC-2 rather than papered over. Whether the deterministic sync controls (`testingModes`, `run(_:)`, `waitForStabilization`) or bounded polling is used depends on Apple signing credentials being available to CI; both paths are specified and the choice is Task 6.1.
