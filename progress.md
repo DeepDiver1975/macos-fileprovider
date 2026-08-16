@@ -56,5 +56,5 @@
 
 ## Log & Execution History
 
-* *2026-08-16*: Initialized `process.md` tracking layout for macOS File Provider extension TDD loop engineering.
+* *2026-08-16*: Initialized `progress.md` tracking layout for macOS File Provider extension TDD loop engineering.
 * *2026-08-16*: Corrected Apple API names, extension point identifiers, `Info.plist` keys and sandbox entitlements after review of PR #1. API names still to be re-verified against Apple's documentation at the start of Phase 1.
