@@ -22,6 +22,11 @@ services:
       PROXY_TLS: "true"
       IDM_ADMIN_PASSWORD: admin
       IDM_CREATE_DEMO_USERS: "false"
+      # Test-fixture only: let the backend-contract tier authenticate the Graph
+      # and WebDAV APIs with Basic auth, so the same credential path exercises
+      # both backends. Production oCIS uses OIDC; the SessionManager bearer path
+      # is covered by unit tests (Task 2.5). Never enable this outside fixtures.
+      PROXY_ENABLE_BASIC_AUTH: "true"
     healthcheck:
       # oCIS serves its own health endpoint on 9200.
       test: ["CMD", "ocis", "health"]
