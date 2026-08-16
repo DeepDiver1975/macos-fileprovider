@@ -5,3 +5,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Repo mandates Conventional Commits; Dependabot's default subject has no type.
+    # It cannot add a DCO Signed-off-by trailer - if a DCO check is enabled later,
+    # allow-list Dependabot or sign off at merge time.
+    commit-message:
+      prefix: "ci"
