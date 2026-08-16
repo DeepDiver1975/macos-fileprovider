@@ -147,17 +147,21 @@ servers. The scenarios themselves are authored during the loop-engineering proce
     `/Applications`, a signing identity the runner accepts). It cannot be reduced to a unit
     test. The end-to-end job in `.github/workflows/ci.yml` carries a placeholder step that
     is replaced with the spike's real body once it is run on a Mac.
-* [ ] **Task 6.1:** settle the AC-3 mechanism: determine whether Apple Developer signing
+* [x] **Task 6.1:** settle the AC-3 mechanism: determine whether Apple Developer signing
   credentials (certificate, provisioning profile carrying
   `com.apple.developer.fileprovider.testing-mode`, team ID) can be provided as CI
   secrets. Record the decision here; implement the other mechanism as the documented
   fallback either way.
-  * **Loop status — fully blocked (an org/human decision, no headless artifact):** whether
-    a paid Apple Developer team's signing credentials can be committed as CI secrets is not
-    something the loop can settle — it needs the team and a policy call. The AC-3 *fallback*
-    (bounded polling with documented per-assertion timeouts) is the path specified for
-    contributors without those credentials, and is what the harness will use until this is
-    recorded.
+  * **Decision (2026-08-16): no Apple signing for now.** Per the project owner, signing
+    credentials are **not** being provisioned. AC-3 therefore uses the **bounded-polling
+    fallback** (poll with documented per-assertion timeouts), *not* the deterministic
+    `fileprovider.testing-mode` path. Consequences, all recorded: the extension is only
+    discovered when the containing app is signed and installed in `/Applications`, so every
+    live-integration step stays blocked (the `NSFileProviderManager.add`/byte-streaming glue
+    in Tasks 4.1/4.2/4.4, the live call in 5.1, the end-to-end tier 5.3, and the runner spike
+    6.0); local `xcodebuild build`/`test` run with `CODE_SIGNING_ALLOWED=NO`. The
+    headless-testable Linux core + `#if canImport(FileProvider)` adapters continue test-first.
+    Revisit only if a paid team's credentials become available as CI secrets.
 * [~] **Task 6.2:** backend fixtures — `test/fixtures/classic/docker-compose.yml`
   (`owncloud/server:11.0.0` + MariaDB + Redis) and `test/fixtures/ocis/docker-compose.yml`,
   plus the CI script that starts the same oCIS version from the `darwin-arm64` release
@@ -343,3 +347,4 @@ Not present in the client suites, and specific to this platform:
 * *2026-08-16 (on a Mac)*: Phase 4 error-classification layer landed test-first (118 tests green). Added `OwnCloudCore.RemoteError` — the backend-agnostic mapping from an HTTP status (shared by WebDAV and Graph) to a semantic failure: 401 → authenticationRequired, 403 → insufficientPermissions, 404 → noSuchItem, 409/412 → versionConflict, 507 → insufficientQuota, 5xx/unclassified → serverError, 2xx → nil (9 tests). Added the Mac-only `RemoteError.asFileProviderError` adapter in `FileProviderSupport` mapping those onto the system errors the replicated-extension handlers must return — `NSFileProviderError` codes (notAuthenticated/noSuchItem/insufficientQuota/serverUnreachable) plus Cocoa `fileWriteNoPermission`/`fileWriteFileExists` for the two cases FileProvider has no code for (6 tests). This closes the "what does a failure mean to the system" half of Tasks 4.1/4.2/4.4; the remaining Mac-only glue is the `URLSession` byte streaming (download-to-temp-URL hand-off for `fetchContents`, upload for the push handlers) wired into the extension target.
 * *2026-08-16 (on a Mac)*: Phase 5 domain adapter landed test-first (122 tests green). Added the Mac-only `FileProviderSupport` translation of the core account model onto the FileProvider domain types (Task 5.1): `NSFileProviderDomain(account:)` builds a replicated domain from `AccountDescriptor`'s stable identifier + display name, and `DomainRemovalChoice.removalMode` maps onto `NSFileProviderManager.DomainRemovalMode` (preserveDownloadedUserData / removeAll), with the default preserving downloads — 4 tests. This is the pure translation half of Task 5.1; the remaining Mac-only work is the live `NSFileProviderManager.add(_:)`/`remove(_:mode:)` calls and the `/Applications` discovery prerequisite, which need a signed, installed app to exercise (Phase 6).
 * *2026-08-16 (on a Mac)*: Wired `FileProviderSupport` into the Xcode project. [`project.yml`](project.yml) now links the `FileProviderSupport` product into the App target (domain add/remove) and the File Provider `.appex` (item/enumerator/error adapters); `xcodebuild -scheme App build` with signing disabled still **BUILD SUCCEEDED** with both extensions embedded and validated, confirming the second SPM product links into the `.appex`. Added `FileProviderSupportTests` to the App scheme's `test:` block so `xcodebuild test` runs it through the generated project alongside `OwnCloudCoreTests` — `xcodebuild test` → **TEST SUCCEEDED**, 122 tests (2 contract skipped). (Local `xcodebuild` build/test uses `CODE_SIGNING_ALLOWED=NO`; a real signed build needs the paid-team provisioning profiles per Task 1.3/6.1.)
+* *2026-08-16 (decision)*: **Task 6.1 settled — no Apple signing for now** (project owner). AC-3 uses the documented **bounded-polling fallback**, not the deterministic `fileprovider.testing-mode` path. All live-integration steps (Tasks 4.1/4.2/4.4 byte-streaming glue, 5.1 live `add`, 5.3 end-to-end, 6.0 runner spike) remain blocked on a signed app installed in `/Applications`; `xcodebuild` runs locally with `CODE_SIGNING_ALLOWED=NO`. Headless-testable core + `#if canImport(FileProvider)` adapters continue test-first. Task 6.1 → `[x]`.
