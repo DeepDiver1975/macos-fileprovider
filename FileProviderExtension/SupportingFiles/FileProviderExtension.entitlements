@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  File Provider extension entitlements (progress.md Task 1.3).
+
+  - app-sandbox: the extension is always sandboxed.
+  - network.client: REQUIRED. Without it every WebDAV/Graph request in Phase 2
+    fails immediately.
+  - application-groups + keychain-access-groups: let the containing app's sign-in
+    flow and the extension share credentials (Tasks 2.5, 5.1, 5.2). Must be
+    provisioned up front. Replace "GROUPID" with the real team/group id.
+  - fileprovider.testing-mode: needed by the Task 5.3 integration suite and the
+    deterministic AC-3 path. Requires a provisioning profile from a PAID Apple
+    Developer team (Task 6.1) — kept here but only usable once that is settled.
+
+  Deliberately NOT present: files.downloads.read-write / files.user-selected.*.
+  Those are host-app file-picker entitlements; a replicated provider writes into
+  the system-provided domain directory.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.owncloud.macos.fileprovider</string>
+    </array>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.owncloud.macos.fileprovider.shared</string>
+    </array>
+    <key>com.apple.developer.fileprovider.testing-mode</key>
+    <true/>
+</dict>
+</plist>
