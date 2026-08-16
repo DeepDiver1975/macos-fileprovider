@@ -1,0 +1,37 @@
+# oCIS fixture (progress.md Task 6.2, AC-1 / AC-7).
+#
+# Pinned to owncloud/ocis:8.2.0. Used for the backend-contract tier on
+# ubuntu-latest. On the macOS end-to-end tier oCIS is instead started from its
+# darwin-arm64 release binary at the SAME version (see start-ocis-macos.sh) —
+# hosted macOS runners have no container runtime (AC-2).
+#
+# IDM_CREATE_DEMO_USERS is off; fixture users are created through the Graph API
+# (BackendAdmin, Task 6.3), never by touching container storage (AC-1).
+services:
+  ocis:
+    image: owncloud/ocis:8.2.0
+    container_name: ocis
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "ocis init || true && ocis server"]
+    ports:
+      - "9200:9200"
+    environment:
+      OCIS_URL: https://localhost:9200
+      OCIS_INSECURE: "true"
+      OCIS_LOG_LEVEL: error
+      PROXY_TLS: "true"
+      IDM_ADMIN_PASSWORD: admin
+      IDM_CREATE_DEMO_USERS: "false"
+    healthcheck:
+      # oCIS serves its own health endpoint on 9200.
+      test: ["CMD", "ocis", "health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - ocis-config:/etc/ocis
+      - ocis-data:/var/lib/ocis
+
+volumes:
+  ocis-config:
+  ocis-data:

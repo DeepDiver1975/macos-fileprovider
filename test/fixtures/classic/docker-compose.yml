@@ -1,0 +1,76 @@
+# ownCloud Classic v11 fixture (progress.md Task 6.2, AC-1 / AC-7).
+#
+# Pinned to owncloud/server:11.0.0 with MariaDB and Redis, mirroring the layout
+# in the official ownCloud Docker install docs. Brought up with `docker compose`
+# in a CI step (not `services:`) so the app can wait on depends_on + health
+# checks — Classic needs the DB healthy before it bootstraps.
+#
+# Fixture data is provisioned afterwards through the OCS provisioning API
+# (BackendAdmin, Task 6.3), never by touching container storage (AC-1).
+services:
+  owncloud:
+    image: owncloud/server:11.0.0
+    container_name: oc_classic
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      OWNCLOUD_DOMAIN: localhost:8080
+      OWNCLOUD_TRUSTED_DOMAINS: localhost
+      OWNCLOUD_DB_TYPE: mysql
+      OWNCLOUD_DB_NAME: owncloud
+      OWNCLOUD_DB_USERNAME: owncloud
+      OWNCLOUD_DB_PASSWORD: owncloud
+      OWNCLOUD_DB_HOST: mariadb
+      OWNCLOUD_ADMIN_USERNAME: admin
+      OWNCLOUD_ADMIN_PASSWORD: admin
+      OWNCLOUD_REDIS_ENABLED: "true"
+      OWNCLOUD_REDIS_HOST: redis
+    healthcheck:
+      test: ["CMD", "/usr/bin/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - files:/mnt/data
+
+  mariadb:
+    image: mariadb:10.11
+    container_name: oc_mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: owncloud
+      MYSQL_USER: owncloud
+      MYSQL_PASSWORD: owncloud
+      MYSQL_DATABASE: owncloud
+    command: ["--max-allowed-packet=128M", "--innodb-log-file-size=64M"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-u", "root", "--password=owncloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - mysql:/var/lib/mysql
+
+  redis:
+    image: redis:7
+    container_name: oc_redis
+    restart: unless-stopped
+    command: ["--databases", "1"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - redis:/data
+
+volumes:
+  files:
+  mysql:
+  redis:

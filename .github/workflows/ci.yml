@@ -1,0 +1,81 @@
+# AC-2 CI: three tiers (progress.md Task 6.5).
+#   1. Unit          — swift test (+ xcodebuild test on the Mac); every PR.
+#   2. Backend contract — core WebDAV/Graph clients vs. both backends in Docker
+#                      on ubuntu-latest; every PR.
+#   3. File Provider end-to-end — full domain/Finder behaviour on a macOS runner
+#                      with oCIS from its darwin-arm64 binary; nightly + label.
+#
+# Third-party actions are pinned to full commit SHAs (AC-2). actions/checkout
+# v4.2.2 == 11bd719. Failing jobs upload diagnostics (AC-6).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"   # nightly end-to-end (off the :00 mark)
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit (swift test)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: swift test (core package)
+        working-directory: Core
+        run: swift test --enable-code-coverage
+      # xcodebuild test for the app + extension targets is added once the
+      # .xcodeproj is generated on the Mac (progress.md Task 1.1 / 1.4).
+
+  backend-contract:
+    name: Backend contract (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [classic, ocis]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Load pinned versions
+        run: cat test/fixtures/versions.env >> "$GITHUB_ENV"
+      - name: Start ${{ matrix.backend }}
+        run: docker compose -f test/fixtures/${{ matrix.backend }}/docker-compose.yml up -d --wait
+      - name: Run backend-contract tests
+        env:
+          OWNCLOUD_TEST_BACKEND: ${{ matrix.backend }}
+        run: |
+          # The contract suite lives in the core package and is gated on the
+          # OWNCLOUD_TEST_BACKEND env var so it is skipped in the pure-unit run.
+          cd Core && swift test --filter BackendContract
+      - name: Collect server logs on failure (AC-6)
+        if: failure()
+        run: docker compose -f test/fixtures/${{ matrix.backend }}/docker-compose.yml logs > backend-logs.txt
+      - name: Upload diagnostics (AC-6)
+        if: failure()
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        with:
+          name: backend-${{ matrix.backend }}-logs
+          path: backend-logs.txt
+
+  end-to-end:
+    name: File Provider end-to-end (oCIS)
+    # Nightly, or on PRs carrying the full-ci label.
+    if: github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Load pinned versions
+        run: cat test/fixtures/versions.env >> "$GITHUB_ENV"
+      - name: Start oCIS from darwin-arm64 binary
+        run: ./test/fixtures/ocis/start-ocis-macos.sh &
+      # The macOS end-to-end tier (domain add + Finder behaviour) requires a
+      # signing identity the runner accepts and the app in /Applications
+      # (progress.md Task 6.0). Wired once that spike passes; Classic v11 has no
+      # end-to-end tier here (AC-2 known gap).
+      - name: Placeholder — end-to-end harness pending Task 6.0
+        run: echo "End-to-end tier pending the Task 6.0 spike on a real macOS runner."
