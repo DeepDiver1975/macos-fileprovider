@@ -226,9 +226,111 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
     ) -> Progress {
-        // Phase 4, Task 4.4.
-        completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
+        // Phase 4, Task 4.4. Content edits are the core sync operation and are
+        // wired here: PUT the new bytes with an `If-Match` on the base version's
+        // etag (optimistic concurrency), then reconcile. Rename/move (a
+        // `.filename`/`.parentItemIdentifier` change) still needs an oCIS move
+        // request shaped in the core, so those fields stay unsupported for now.
+        guard let connection else {
+            completionHandler(nil, [], false, NSFileProviderError(.notAuthenticated))
+            return Progress()
+        }
+        guard changedFields.contains(.contents) else {
+            completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
+            return Progress()
+        }
+
+        // The base version's content token is the etag the system last saw; send
+        // it as `If-Match` so a server-side change since then fails the write
+        // rather than silently clobbering it.
+        let etag = String(data: version.contentVersion, encoding: .utf8).flatMap { $0.isEmpty ? nil : $0 }
+        let identifier = item.itemIdentifier
+        let parent: ItemIdentifier = item.parentItemIdentifier == .rootContainer
+            ? .rootContainer
+            : ItemIdentifier(rawValue: item.parentItemIdentifier.rawValue)
+
+        switch connection.account.backend {
+        case .ocis:
+            modifyContentsOCIS(
+                connection: connection, itemID: identifier.rawValue, etag: etag,
+                contents: newContents, completionHandler: completionHandler
+            )
+        case .classic:
+            modifyContentsClassic(
+                connection: connection, path: identifier.rawValue, parent: parent, etag: etag,
+                contents: newContents, completionHandler: completionHandler
+            )
+        }
         return Progress()
+    }
+
+    /// oCIS content modify: PUT on `/items/{id}/content` returns the updated
+    /// driveItem, so it reconciles directly.
+    private func modifyContentsOCIS(
+        connection: BackendConnection,
+        itemID: String,
+        etag: String?,
+        contents newContents: URL?,
+        completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
+    ) {
+        let modifyRequest = connection.modifyContentsRequest(itemID: itemID, ifMatchETag: etag)
+        let client = self.client
+        let uploader = ContentUploader(client: client)
+        let auth = FileProviderExtension.authorization(for: account)
+        Task {
+            do {
+                let responseBody: Data
+                if let newContents {
+                    responseBody = try await uploader.uploadReturningBody(modifyRequest, fromFile: newContents, authorization: auth)
+                } else {
+                    responseBody = try await client.send(modifyRequest, body: Data(), authorization: auth)
+                }
+                let updated = try GraphJSONDecoder().decodeItem(responseBody)
+                let item = FileProviderItem(itemDescription: FileProviderItemDescription(graphItem: updated))
+                completionHandler(item, [], false, nil)
+            } catch let error as RemoteError {
+                completionHandler(nil, [], false, error.asFileProviderError)
+            } catch {
+                completionHandler(nil, [], false, error)
+            }
+        }
+    }
+
+    /// Classic content modify: a WebDAV PUT returns no metadata body, so after the
+    /// write we read the item back (Depth:0 PROPFIND) for its new etag, mirroring
+    /// `createItemClassic`.
+    private func modifyContentsClassic(
+        connection: BackendConnection,
+        path: String,
+        parent: ItemIdentifier,
+        etag: String?,
+        contents newContents: URL?,
+        completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
+    ) {
+        let modifyRequest = connection.modifyContentsRequest(path: path, ifMatchETag: etag)
+        let readBackRequest = connection.readBackRequest(path: path)
+        let client = self.client
+        let uploader = ContentUploader(client: client)
+        let auth = FileProviderExtension.authorization(for: account)
+        Task {
+            do {
+                if let newContents {
+                    _ = try await uploader.uploadReturningBody(modifyRequest, fromFile: newContents, authorization: auth)
+                } else {
+                    _ = try await client.send(modifyRequest, body: Data(), authorization: auth)
+                }
+                let body = try await client.send(readBackRequest, authorization: auth)
+                guard let description = try connection.readBackItem(fromPropfind: body, parentIdentifier: parent) else {
+                    completionHandler(nil, [], false, NSFileProviderError(.serverUnreachable))
+                    return
+                }
+                completionHandler(FileProviderItem(itemDescription: description), [], false, nil)
+            } catch let error as RemoteError {
+                completionHandler(nil, [], false, error.asFileProviderError)
+            } catch {
+                completionHandler(nil, [], false, error)
+            }
+        }
     }
 
     func deleteItem(
