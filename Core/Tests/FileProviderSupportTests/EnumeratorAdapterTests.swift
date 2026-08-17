@@ -59,6 +59,37 @@ final class EnumeratorAdapterTests: XCTestCase {
         XCTAssertNotNil(observer.finishError)
     }
 
+    // MARK: enumerateItems (async RemoteEnumerationSource)
+
+    func testEnumeratesFromAsyncSourceAcrossPages() {
+        // A source that vends two pages then stops — the real backend path.
+        let pages = [
+            EnumerationPage(items: [desc("a"), desc("b")], nextCursor: PageCursor(rawValue: "p2"), anchor: nil),
+            EnumerationPage(items: [desc("c")], nextCursor: nil, anchor: SyncAnchor(token: "final")),
+        ]
+        let enumerator = ItemEnumerator(source: ScriptedAsyncSource(pages: pages))
+
+        let observer = FakeEnumerationObserver()
+        enumerator.enumerateItems(for: observer, startingAt: firstPage)
+        observer.wait(self)
+
+        XCTAssertEqual(observer.enumeratedIdentifiers, ["a", "b", "c"])
+        XCTAssertNil(observer.finishError)
+        XCTAssertEqual(currentAnchor(of: enumerator), SyncAnchor(token: "final").data)
+    }
+
+    func testAsyncSourceErrorSurfacesToObserver() {
+        struct Boom: Error {}
+        let enumerator = ItemEnumerator(source: ThrowingAsyncSource(error: Boom()))
+
+        let observer = FakeEnumerationObserver()
+        enumerator.enumerateItems(for: observer, startingAt: firstPage)
+        observer.wait(self)
+
+        XCTAssertTrue(observer.enumeratedIdentifiers.isEmpty)
+        XCTAssertNotNil(observer.finishError)
+    }
+
     // MARK: enumerateChanges
 
     func testEnumerateChangesReportsUpdatesDeletionsAndAnchor() {
@@ -122,6 +153,22 @@ final class EnumeratorAdapterTests: XCTestCase {
         wait(for: [exp], timeout: 2)
         return received?.rawValue
     }
+}
+
+// MARK: - Async source fakes
+
+private struct ScriptedAsyncSource: RemoteEnumerationSource {
+    let pages: [EnumerationPage]
+    func fetchPage(cursor: PageCursor?) async throws -> EnumerationPage {
+        guard let cursor else { return pages[0] }
+        let index = Int(cursor.rawValue.dropFirst()) ?? 1  // "p2" → 2 → pages[1]
+        return pages[index - 1]
+    }
+}
+
+private struct ThrowingAsyncSource: RemoteEnumerationSource {
+    let error: Error
+    func fetchPage(cursor: PageCursor?) async throws -> EnumerationPage { throw error }
 }
 
 // MARK: - Fakes

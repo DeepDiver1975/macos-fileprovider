@@ -13,15 +13,28 @@ public final class ItemEnumerator: NSObject, NSFileProviderEnumerator {
     /// Produces the change set (and the resulting anchor) since a prior anchor.
     public typealias ChangeProvider = (_ since: SyncAnchor?) throws -> (ChangeSet, SyncAnchor)
 
-    private let paginator: Paginator
+    /// Runs a full enumeration to completion. Both the synchronous ``Paginator``
+    /// and the async ``RemoteEnumerationSource`` are adapted onto this one shape so
+    /// the observer plumbing below is identical for the in-memory test path and
+    /// the real network-backed path.
+    private let enumerate: () async throws -> EnumerationResult
     private let changeProvider: ChangeProvider?
 
     /// The most recent anchor observed from a completed enumeration, surfaced via
     /// ``currentSyncAnchor(completionHandler:)``. `nil` until the first pass.
     private var latestAnchor: SyncAnchor?
 
+    /// Synchronous, in-memory enumeration over a ``Paginator`` (used by tests and
+    /// any source that has the pages in hand).
     public init(paginator: Paginator, changeProvider: ChangeProvider? = nil) {
-        self.paginator = paginator
+        self.enumerate = { try paginator.enumerateAll() }
+        self.changeProvider = changeProvider
+    }
+
+    /// Network-backed enumeration: walks a ``RemoteEnumerationSource`` (WebDAV or
+    /// Graph) page by page over real async I/O.
+    public init(source: RemoteEnumerationSource, changeProvider: ChangeProvider? = nil) {
+        self.enumerate = { try await enumerateAll(from: source) }
         self.changeProvider = changeProvider
     }
 
@@ -30,13 +43,16 @@ public final class ItemEnumerator: NSObject, NSFileProviderEnumerator {
     }
 
     public func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) {
-        do {
-            let result = try paginator.enumerateAll()
-            if let anchor = result.anchor { latestAnchor = anchor }
-            observer.didEnumerate(result.items.map(FileProviderItem.init(itemDescription:)))
-            observer.finishEnumerating(upTo: nil)
-        } catch {
-            observer.finishEnumeratingWithError(error)
+        let enumerate = self.enumerate
+        Task {
+            do {
+                let result = try await enumerate()
+                if let anchor = result.anchor { self.latestAnchor = anchor }
+                observer.didEnumerate(result.items.map(FileProviderItem.init(itemDescription:)))
+                observer.finishEnumerating(upTo: nil)
+            } catch {
+                observer.finishEnumeratingWithError(error)
+            }
         }
     }
 
