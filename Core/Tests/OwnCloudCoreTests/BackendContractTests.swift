@@ -124,16 +124,24 @@ private struct FixtureConfig {
 
 /// Trusts the fixture's self-signed certificate. Test-only — the production
 /// networking layer pins/validates the real certificate (progress.md Task 6.2).
+///
+/// `serverTrust` and `URLCredential(trust:)` are Darwin-only; swift-corelibs-
+/// foundation on Linux marks them unavailable, so the trust override is compiled
+/// only where the Security framework exists. On Linux the fixture cert is trusted
+/// through the system CA store instead (the CI ocis job installs it), and the
+/// delegate falls through to default handling.
 private final class InsecureTrustDelegate: NSObject, URLSessionDelegate {
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
+        #if canImport(Security)
         if let trust = challenge.protectionSpace.serverTrust {
             completionHandler(.useCredential, URLCredential(trust: trust))
-        } else {
-            completionHandler(.performDefaultHandling, nil)
+            return
         }
+        #endif
+        completionHandler(.performDefaultHandling, nil)
     }
 }

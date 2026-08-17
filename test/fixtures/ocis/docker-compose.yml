@@ -28,11 +28,15 @@ services:
       # is covered by unit tests (Task 2.5). Never enable this outside fixtures.
       PROXY_ENABLE_BASIC_AUTH: "true"
     healthcheck:
-      # oCIS serves its own health endpoint on 9200.
-      test: ["CMD", "ocis", "health"]
+      # `ocis health` is not a subcommand in 8.2.0 (exits "No help topic for
+      # 'health'"), so probe the proxy directly: a Basic-authenticated Graph call
+      # proves the whole stack the contract tier drives — proxy + IDP + Graph — is
+      # actually serving, not just that a port is open.
+      test: ["CMD", "curl", "-skf", "-u", "admin:admin", "https://127.0.0.1:9200/graph/v1.0/me/drives"]
       interval: 15s
       timeout: 10s
-      retries: 10
+      retries: 20
+      start_period: 60s
     volumes:
       - ocis-config:/etc/ocis
       - ocis-data:/var/lib/ocis

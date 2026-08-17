@@ -56,6 +56,17 @@ jobs:
         run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' test/fixtures/versions.env >> "$GITHUB_ENV"
       - name: Start ${{ matrix.backend }}
         run: docker compose -f test/fixtures/${{ matrix.backend }}/docker-compose.yml up -d --wait
+      - name: Trust the oCIS fixture certificate
+        # oCIS insists on https even for the fixture (its IDP refuses a non-https
+        # issuer), and swift-corelibs-foundation on Linux has no serverTrust API to
+        # accept a self-signed cert at runtime — so trust it at the OS level. The
+        # cert's SAN already covers localhost/127.0.0.1. Classic serves plain http
+        # and skips this.
+        if: matrix.backend == 'ocis'
+        run: |
+          openssl s_client -connect localhost:9200 -servername localhost </dev/null 2>/dev/null \
+            | openssl x509 | sudo tee /usr/local/share/ca-certificates/ocis-fixture.crt >/dev/null
+          sudo update-ca-certificates
       - name: Run backend-contract tests
         env:
           OWNCLOUD_TEST_BACKEND: ${{ matrix.backend }}
