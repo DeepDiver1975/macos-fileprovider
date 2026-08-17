@@ -140,12 +140,23 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     // MARK: Credentials
 
-    /// The `Authorization` header for this domain's account, from the shared
-    /// Keychain access group. Returns `nil` until the Keychain-backed
-    /// `CredentialStore` is wired (Task 1.3 / 2.5, Mac runtime), so handlers fail
-    /// cleanly with `.notAuthenticated` rather than sending unauthenticated
-    /// requests.
+    /// The shared Keychain access group both the app's sign-in flow and this
+    /// extension read credentials from. Matches the `keychain-access-groups`
+    /// entitlement; the leading team prefix (`$(AppIdentifierPrefix)`) is applied
+    /// automatically by the keychain for the app-group form used here.
+    private static let keychainAccessGroup = "com.owncloud.macos.fileprovider.shared"
+
+    /// The `Authorization` header for this domain's account, read from the shared
+    /// Keychain access group (Task 1.3 / 2.5). Returns `nil` when the account is
+    /// unknown or no credentials are stored, so handlers fail cleanly with
+    /// `.notAuthenticated` rather than sending unauthenticated requests.
     private static func authorization(for account: AccountDescriptor?) -> String? {
-        nil
+        guard let account else { return nil }
+        let store = KeychainCredentialStore(account: account, accessGroup: keychainAccessGroup)
+        let session = SessionManager(store: store)
+        // Refresh a bearer token that is at/near expiry before building the
+        // header; a no-op for Basic auth and when no refresh handler is wired.
+        try? session.refreshTokenIfNeeded()
+        return try? session.authorizationHeader()
     }
 }
