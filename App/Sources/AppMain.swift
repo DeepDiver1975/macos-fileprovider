@@ -24,6 +24,13 @@ struct ContentView: View {
             Text("Core \(OwnCloudCore.version)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            #if DEBUG
+            Divider()
+                .padding(.vertical, 8)
+            // Local end-to-end testing stand-in for the not-yet-built sign-in and
+            // domain registration (Task 6.0 spike); compiled only in DEBUG.
+            DevHarnessView()
+            #endif
         }
         .padding(40)
     }

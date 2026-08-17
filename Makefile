@@ -6,13 +6,24 @@
 #   make unit                                # the pure-unit swift test run
 #   make up   BACKEND=classic|ocis           # just start a fixture
 #   make down BACKEND=classic|ocis           # just stop it
+#   make install                             # build + sign the app, install to ~/Applications
 #
 # BACKEND selects the fixture; it defaults to classic.
 
 BACKEND ?= classic
 COMPOSE  = docker compose -f test/fixtures/$(BACKEND)/docker-compose.yml
 
-.PHONY: unit backend-contract up down wait clean
+# Local install for the Task 6.0 spike. The extension is only discovered when the
+# containing app lives in an Applications folder, so a signed Debug build is copied
+# there. Defaults to ~/Applications (no elevation needed); set INSTALL_DIR=/Applications
+# to install system-wide (requires sudo/admin — cp there is not permitted otherwise).
+APP_NAME     = ownCloud File Provider.app
+DERIVED_DATA = build
+BUILT_APP    = $(DERIVED_DATA)/Build/Products/Debug/$(APP_NAME)
+INSTALL_DIR  ?= $(HOME)/Applications
+INSTALLED_APP = $(INSTALL_DIR)/$(APP_NAME)
+
+.PHONY: unit backend-contract up down wait clean install
 
 unit:
 	cd Core && swift test
@@ -47,3 +58,20 @@ wait:
 clean:
 	-$(MAKE) down BACKEND=classic
 	-$(MAKE) down BACKEND=ocis
+
+# Build + sign the app (both .appex embedded) and install it to an Applications
+# folder (defaults to ~/Applications) so macOS discovers the File Provider
+# extension. Signing must be real here — the
+# shared keychain group and the testing-mode entitlement need a valid signature —
+# so this never passes CODE_SIGNING_ALLOWED=NO.
+install:
+	xcodegen generate
+	xcodebuild -project OwnCloudFileProvider.xcodeproj -scheme App \
+		-configuration Debug -destination 'platform=macOS' \
+		-derivedDataPath $(DERIVED_DATA) -allowProvisioningUpdates build
+	mkdir -p "$(INSTALL_DIR)"
+	rm -rf "$(INSTALLED_APP)"
+	cp -R "$(BUILT_APP)" "$(INSTALLED_APP)"
+	codesign --verify --deep --strict "$(INSTALLED_APP)"
+	@echo "Installed $(INSTALLED_APP); embedded extensions:"
+	@ls "$(INSTALLED_APP)/Contents/PlugIns"

@@ -147,6 +147,21 @@ servers. The scenarios themselves are authored during the loop-engineering proce
     `/Applications`, a signing identity the runner accepts). It cannot be reduced to a unit
     test. The end-to-end job in `.github/workflows/ci.yml` carries a placeholder step that
     is replaced with the spike's real body once it is run on a Mac.
+  * **Local spike scaffolding done (2026-08-17):** the repeatable local path is now in
+    place. A DEBUG-only dev harness (`App/Sources/DevHarness.swift`, wired into
+    `ContentView`) stands in for the not-yet-built sign-in (5.2) and live domain add (5.1):
+    **Sign in** performs the initial shared-Keychain write via `KeychainCredentialStore`,
+    **Add domain** calls `NSFileProviderManager.add`, **Remove domain**/**Sign out** reset
+    it — defaulting to the Classic fixture (`admin`/`admin` at `http://localhost:8080`,
+    path-addressed so no drive-id resolution). A `make install` target builds+signs Debug and
+    installs to `~/Applications` (an FP discovery location needing no elevation).
+    **Verified scriptable parts:** `make install` → `codesign --verify --deep --strict`
+    exits 0, both `.appex` embedded under `Contents/PlugIns`, testing-mode entitlement
+    survives signing; Classic fixture up; the WebDAV path the enumerator drives is live
+    (PROPFIND → 207, a seeded `harness-test.txt` is listed); 204 unit tests green. **Still
+    manual (GUI, unscriptable):** the Sign in → Add domain click-through and confirming
+    `admin@localhost` mounts + enumerates in Finder — the app is installed and launched for
+    that. CI hosted-runner secrets remain the separate open item.
 * [x] **Task 6.1:** settle the AC-3 mechanism: determine whether Apple Developer signing
   credentials (certificate, provisioning profile carrying
   `com.apple.developer.fileprovider.testing-mode`, team ID) can be provided as CI
