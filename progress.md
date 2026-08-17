@@ -65,8 +65,8 @@ a **Loop status** note saying exactly what is done and what is blocked.
 
 ## Phase 5: UI & Extension Lifecycle Integration
 
-* [~] **Task 5.1:** Implement `NSFileProviderManager` domain setup, connection, and user sign-in flow initialization. **Prerequisite:** on macOS the extension is only discovered and launched when the containing app resides in `/Applications` (or `~/Applications`), or FileProvider testing mode is enabled. Launched straight from Xcode's DerivedData, `add(domain:)` reports success and Finder silently shows nothing. (Deployment behaviour rather than documented API — reconfirm on the Mac.) *(Done in core: `AccountSetupTests` drive `BackendDetector` (oCIS via OIDC discovery, Classic via a parseable installed `status.php`, OIDC wins ties), `AccountDescriptor` (stable `domainIdentifier`, `user@host` display name), and `DomainRemovalChoice` (default preserves downloads).)* **Blocked:** the `NSFileProviderManager.add(_:)` call, `NSFileProviderDomain` construction, and the `/Applications` discovery prerequisite are the Mac-only adapter.
-* [~] **Task 5.2:** Build File Provider UI extension (`FPUIActionExtensionViewController`) for authentication credential inputs and domain removal actions. Scope note: from macOS 11 on, custom actions can be declared directly in the File Provider extension via `NSExtensionFileProviderActions` and run without presenting UI — so the UI extension is only needed for the flows that actually show something, such as sign-in. *(Done: `ActionViewController` scaffold with `prepare(forError:)`/`prepare(forAction:…)` stubs referenced by the UI extension Info.plist.)* **Blocked:** the actual credential-entry UI and its `FPUIActionExtensionViewController` behaviour need Xcode/AppKit on a Mac.
+* [~] **Task 5.1:** Implement `NSFileProviderManager` domain setup, connection, and user sign-in flow initialization. **Prerequisite:** on macOS the extension is only discovered and launched when the containing app resides in `/Applications` (or `~/Applications`), or FileProvider testing mode is enabled. Launched straight from Xcode's DerivedData, `add(domain:)` reports success and Finder silently shows nothing. (Deployment behaviour rather than documented API — reconfirm on the Mac.) *(Done in core: `AccountSetupTests` drive `BackendDetector` (oCIS via OIDC discovery, Classic via a parseable installed `status.php`, OIDC wins ties), `AccountDescriptor` (stable `domainIdentifier`, `user@host` display name), and `DomainRemovalChoice` (default preserves downloads).)* **Blocked:** the `NSFileProviderManager.add(_:)` call, `NSFileProviderDomain` construction, and the `/Applications` discovery prerequisite are the Mac-only adapter. **Superseded in part by Phase 7:** the user-facing half of this task (who calls `add`/`remove`, and with what identity) is designed in Tasks 7.1–7.5 — the domain identifier changes from `AccountDescriptor.domainIdentifier` to `SyncRoot.domainIdentifier` there, so do Task 7.1 before extending this one.
+* [~] **Task 5.2:** Build File Provider UI extension (`FPUIActionExtensionViewController`) for authentication credential inputs and domain removal actions. Scope note: from macOS 11 on, custom actions can be declared directly in the File Provider extension via `NSExtensionFileProviderActions` and run without presenting UI — so the UI extension is only needed for the flows that actually show something, such as sign-in. *(Done: `ActionViewController` scaffold with `prepare(forError:)`/`prepare(forAction:…)` stubs referenced by the UI extension Info.plist.)* **Blocked:** the actual credential-entry UI and its `FPUIActionExtensionViewController` behaviour need Xcode/AppKit on a Mac. **Scope narrowed by Phase 7:** Task 7.9 keeps this extension a *launcher* — `prepare(forError:)` opens the containing app at the right account rather than reimplementing sign-in (least of all OIDC) inside a sandboxed appex. The credential UI itself lives in Task 7.8.
 * [ ] **Task 5.3:** Run end-to-end integration test suite validating Finder synchronization performance and error recovery states. This is the Phase 6 acceptance suite, not a second one. *(Deferred: this **is** the Phase 6 suite — see Tasks 6.0–6.6. It is Mac + Docker + signing gated and cannot run in the headless loop.)*
 * **Acceptance gate:** the lifecycle scenario group — domain add and removal (including the `NSFileProviderManager.DomainRemovalMode` choice of what happens to local files), sign-in and re-authentication after credential expiry, and behaviour while the domain is disconnected (`NSFileProviderDomain.isDisconnected`). *(Gate stays open — requires the Phase 6 acceptance suite on a Mac against both backends.)*
 
@@ -246,6 +246,157 @@ servers. The scenarios themselves are authored during the loop-engineering proce
 
 ---
 
+## Phase 7: User-Facing Configuration
+
+The integration works but cannot be configured. Design spec (not committed —
+`docs/superpowers/` is git-ignored per repo hygiene rules):
+`docs/superpowers/specs/2026-08-17-fileprovider-configuration-design.md`. Read it
+before starting; the decisions below are load-bearing and are argued there.
+
+**Scope:** accounts plus sync selection — add/remove account, sign in, sign out with
+the `DomainRemovalChoice`, re-authenticate, and choose which oCIS spaces appear in
+Finder. Deliberately **out**: known-folder (Desktop/Documents) claim, MDM/managed
+preferences, menu bar item, custom per-item Finder actions, Classic folder selection,
+bandwidth/ignore-list/log-level settings. Each is a decision with a reason in the spec,
+not an omission.
+
+**Two framing decisions that shape every task below:**
+
+1. **There is no System Settings pane to build.** macOS 13+ has no public API for a
+   third party to add one; iCloud's entry is first-party UI. What macOS does give is a
+   per-domain on/off toggle — `NSFileProviderDomain.userEnabled` documents it as *"if
+   the user disables the domain in the System Preferences"* — which we **observe and
+   surface**, never fight. Configuration lives in the containing app, which macOS
+   already forces into `/Applications` for the extension to be discovered at all
+   (Task 5.1). A legacy `/Library/PreferencePanes` bundle is rejected in the spec with
+   reasons; do not reopen it without reading them.
+2. **One `NSFileProviderDomain` per oCIS space** (a Classic account is one domain over
+   its files root). Selecting a space adds its domain; deselecting removes it. This is
+   what `BackendConnection.swift:19` already assumes — *"the oCIS drive the domain maps
+   to, resolved at sign-in"* — and it makes the selection a lifecycle operation over an
+   API the system already persists, not a setting we store and must keep in sync.
+
+* [ ] **Task 7.0 (verify first, cheap, do before writing code):** resolve the five
+  unverified assumptions in the spec's §9, because each one silently changes an
+  implementation detail. (a) Do extension instances for multiple domains share a
+  process? — determines whether Task 7.6's lock is required or merely harmless (build it
+  either way). (b) Does Finder show `NSExtensionFileProviderActions` when
+  right-clicking a *domain row in the sidebar*? — the optional "Settings…" affordance;
+  note Apple's key page lists iOS/iPadOS/visionOS only, yet Nextcloud ships these on
+  macOS. (c) The System Settings deep-link URL/anchor for the File Providers list.
+  (d) The real behaviour of `NSExtensionFileProviderAllowsUserControlledEviction` (an
+  undocumented key, read from Nextcloud's shipping `FileProviderExt/Info.plist`).
+  (e) How the Finder sidebar copes with ~12 domains, and the per-domain resource cost.
+  Record each answer here as a finding, the way Task 1.2's identifier check was recorded.
+* [ ] **Task 7.1:** the identity split — headless, and it fixes a live bug.
+  `AccountDescriptor.domainIdentifier` currently doubles as the domain identifier
+  (`DomainAdapter.swift:12`) *and* the Keychain item key
+  (`KeychainCredentialStore.swift:47`); with N domains per account those must diverge, or
+  every space gets its own credential item and its own refresh token. Rename the property
+  to `accountIdentifier` (same `backend|serverURL|username` encoding, same `maxSplits: 2`
+  round-trip, no Keychain migration) and add `SyncRoot` (account + optional `driveID`)
+  owning `domainIdentifier` as `"<driveID>|<accountIdentifier>"` — drive first so the
+  username stays the verbatim tail and the existing parser handles it. Replace
+  `NSFileProviderDomain(account:)` with `NSFileProviderDomain(syncRoot:displayName:)`, and
+  add `DomainDisplayNamer` for the two-accounts-both-with-a-"Personal"-space collision.
+  * *Test first:* `SyncRoot` round-trip for oCIS and Classic (empty head), rejection of a
+    `driveID` containing `|`, rejection of an unparseable tail; a regression test that a
+    username containing `|` still survives the rename; `DomainDisplayNamer` with no
+    collision, a cross-account collision, and a within-account collision.
+  * **Then fix the bug:** `FileProviderExtension.swift:34` hardcodes `driveID: nil`, so
+    every oCIS Graph request currently builds `drives//…`. Parse a `SyncRoot` in
+    `init(domain:)` and pass its `driveID` into `BackendConnection`. This is a
+    prerequisite for oCIS enumeration working at all, so the Phase 3 gate depends on it
+    too — not just Phase 7.
+* [ ] **Task 7.2:** the space catalog. Add `GraphRequestBuilder.listDrives()` for
+  `GET /graph/v1.0/me/drives` — the endpoint `BackendContractTests.swift:54` currently
+  hits with a hand-built URL, so there is no builder for it yet — and a `SpaceCatalog` /
+  `Space` value type (drive id, name, `driveType`, quota) mapped from the existing
+  `GraphJSONDecoder.decodeDriveList`. Classic's catalog is the single files root.
+  * *Test first (unit):* decode a real drive-list fixture covering personal, project and
+    shared types plus quota. *Then (backend-contract tier, both backends):* fetch the
+    catalog from live oCIS with spaces provisioned through the Graph API per AC-1, and
+    assert a space the token cannot see never appears.
+* [ ] **Task 7.3:** persistence — headless, over an injectable store seam like
+  `KeychainBackend`. An `AccountRegistry`: one `UserDefaults` key in
+  `group.com.owncloud.macos.fileprovider` holding JSON-encoded `[AccountRecord]`
+  (accountIdentifier, backend, serverURL, username). Credentials stay in the Keychain
+  untouched. Plus a display-only space-catalog cache (JSON in the app group container) so
+  the settings window renders instantly and offline. The registry exists for exactly one
+  reason: an account with **zero** spaces selected has no domains and would otherwise
+  vanish. The cache is never authoritative.
+  * *Test first:* Codable round-trip, corrupt-blob tolerance (the posture
+    `KeychainCredentialStoreTests` already sets), and empty/absent-key defaults.
+* [ ] **Task 7.4:** `DomainReconciler.plan(registry:existing:intent:)` →
+  `(add, remove, orphans)` — a pure function, the pattern `BackendDetector` and
+  `Paginator` already establish. **The system's domain list is the source of truth for
+  the selection**; `getDomainsWithCompletionHandler` already persists across launches and
+  propagates to the extension, so there is no parallel "selected spaces" list to keep in
+  sync. (Nextcloud ships `resetVfsForAccount` precisely because their state can drift.)
+  Orphans are domains whose account is absent from the registry — a leftover install, or
+  an account removed while the app was closed.
+  * *Test first:* add, remove, no-op, orphan, zero-space account, account-removed-while-closed.
+* [ ] **Task 7.5:** the Mac-only `DomainService` adapter over `NSFileProviderManager`:
+  `getDomainsWithCompletionHandler` → `[SyncRoot]`, `add(_:)`, `remove(_:mode:)` driven by
+  `DomainRemovalChoice.removalMode`, and orphan removal **only on confirmation, never
+  silently**. Enforce single-instance for the app so two copies cannot reconcile
+  concurrently (Nextcloud ships `singleinstancemanager_mac` for the same reason). Ordering
+  matters and is specified so any crash leaves recoverable state — the registry brackets
+  the domain lifetime: on add, write the account record *before* adding domains (a
+  zero-space account is legal); on removal, remove domains → delete credentials → delete
+  the record *last* (an orphan domain is detectable; a missing credential just reads as
+  "signed out").
+* [ ] **Task 7.6:** credential-refresh arbitration — **this is a real bug created by the
+  per-space domain model, not a theoretical one.** N extension instances each hold a
+  `SessionManager` over the same Keychain item; oCIS/Keycloak rotate refresh tokens by
+  default, so the first instance to refresh invalidates the token the other N−1 hold and
+  every space but one is signed out. Fix with cross-process double-checked locking: take
+  an exclusive `flock` on a file in the app group container, re-read the Keychain item,
+  refresh only if it is *still* expired, and let losers pick up the winner's token. Plus a
+  retry: on any refresh failure, re-read the Keychain once before surfacing
+  `.notAuthenticated`. Basic-auth Classic is unaffected.
+  * *Test first:* the re-read-then-decide path over a fake lock, using `SessionManager`'s
+    existing injected clock. The lock itself is a thin Mac-only adapter behind a seam.
+  * *Depends on* the oCIS OIDC token-endpoint `RefreshHandler` still outstanding in Task 2.5.
+* [ ] **Task 7.7:** a space that disappears server-side. The extension maps a
+  root-enumeration 404 onto `NSFileProviderManager.disconnect(reason:options:)` with a
+  human string Finder surfaces, instead of failing every operation. It must **not** remove
+  the domain — that would discard or orphan materialised files without consent. The app's
+  catalog refresh flags the row; removal stays a user action. `reconnect` when the space
+  returns.
+* [ ] **Task 7.8:** the settings window — the app's *main* window, not a separate
+  `Settings` scene, since configuration is the app's only job. One `NavigationSplitView`:
+  an accounts sidebar plus Account / Spaces / Advanced tabs (layout sketched in the spec's
+  §7). The Spaces tab is the checklist; for Classic it shows one non-editable "All files"
+  row **plus a line saying selection is an oCIS capability** — the difference is stated,
+  not hidden, matching AC-1's `@ocisOnly`-with-a-reason convention. Deselect prompts with
+  the `DomainRemovalChoice` worded concretely ("Keep the 840 MB already downloaded" /
+  "Remove them"). Advanced carries reset-domain (remove + re-add clean), diagnostics via
+  `requestDiagnosticCollection(for:errorReason:)`, and version info. **Surface
+  `userEnabled`:** if someone flips the System Settings toggle, say so and link to the
+  pane — otherwise it reads as our bug. Sign-in lives here: Classic via `BackendDetector`
+  + username/password or app password, oCIS via OIDC through `ASWebAuthenticationSession`.
+  * **Mac-gated** (AppKit/SwiftUI). Keep every decision it renders in the core types from
+    Tasks 7.1–7.4 so the view layer stays thin and the logic stays headlessly tested.
+* [ ] **Task 7.9:** the UI extension stays a **launcher**, not a settings host.
+  `prepare(forError:)` shows a minimal "Reconnect" sheet that opens the app at that
+  account's sign-in — no second OIDC implementation inside a sandboxed appex. Separately,
+  set `NSExtensionFileProviderAllowsUserControlledEviction` in the File Provider
+  extension's `Info.plist`: one key buys Finder-native "Remove Download" with no code
+  (pending Task 7.0(d)).
+* [ ] **Task 7.10:** the acceptance scenarios for this phase, joining the Phase 5
+  lifecycle group per AC-5 under AC-3's ten-consecutive-green rule: select a space →
+  domain appears and enumerates; deselect preserving downloads → files remain on disk,
+  domain gone; deselect with `removeAll` → files gone; sign out with two spaces selected →
+  both domains removed and the credential deleted; orphan detection after a registry wipe;
+  and **the refresh race** — two spaces selected, token forced to expire, both stay
+  authenticated. Task 7.6 does not count as done until that last scenario exists and runs.
+* **Acceptance gate:** the configuration scenario group above, green on both backends
+  (Classic exercising the account/sign-out half, oCIS the space-selection half per AC-1's
+  tagging), plus the Phase 5 lifecycle gate it extends.
+
+---
+
 ## References
 
 Every Apple symbol, entitlement and `Info.plist` key named above was checked
@@ -259,6 +410,8 @@ what to fetch; the HTML pages are a JavaScript shell.
 * Protocols and types: [NSFileProviderReplicatedExtension](https://developer.apple.com/documentation/fileprovider/nsfileproviderreplicatedextension) · [NSFileProviderEnumerating](https://developer.apple.com/documentation/fileprovider/nsfileproviderenumerating) · [NSFileProviderEnumerator](https://developer.apple.com/documentation/fileprovider/nsfileproviderenumerator) · [NSFileProviderChangeObserver](https://developer.apple.com/documentation/fileprovider/nsfileproviderchangeobserver) · [NSFileProviderSyncAnchor](https://developer.apple.com/documentation/fileprovider/nsfileprovidersyncanchor) · [NSFileProviderManager](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager)
 * Entitlements: [App Sandbox](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.app-sandbox) · [network.client](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.network.client) · [Keychain Access Groups](https://developer.apple.com/documentation/bundleresources/entitlements/keychain-access-groups) · [App Groups](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.application-groups) · [fileprovider.testing-mode](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.fileprovider.testing-mode)
 * `Info.plist`: [NSExtension](https://developer.apple.com/documentation/bundleresources/information-property-list/nsextension) · [NSExtensionPointIdentifier](https://developer.apple.com/documentation/bundleresources/information-property-list/nsextension/nsextensionpointidentifier) · [NSFileProviderDomainUsageDescription](https://developer.apple.com/documentation/bundleresources/information-property-list/nsfileproviderdomainusagedescription)
+* Configuration surfaces (Phase 7): [userEnabled](https://developer.apple.com/documentation/fileprovider/nsfileproviderdomain/userenabled) — documents the System Settings toggle we observe rather than build · [isHidden](https://developer.apple.com/documentation/fileprovider/nsfileproviderdomain/ishidden) · [getDomainsWithCompletionHandler](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/getdomains(completionhandler:)) · [add(\_:completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/add(_:completionhandler:)) · [remove(\_:mode:completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/remove(_:mode:completionhandler:)) · [disconnect(reason:options:completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/disconnect(reason:options:completionhandler:)) · [reconnect(completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/reconnect(completionhandler:)) · [evictItem(identifier:completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/evictitem(identifier:completionhandler:)) · [requestDiagnosticCollection(for:errorReason:completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/requestdiagnosticcollection(for:errorreason:completionhandler:)) · [claimKnownFolders(\_:localizedReason:completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/claimknownfolders(_:localizedreason:completionhandler:)) (per-domain — the reason known folders are out of v1) · [FPUIActionExtensionViewController](https://developer.apple.com/documentation/fileproviderui/fpuiactionextensionviewcontroller) · [NSFileProviderError.notAuthenticated](https://developer.apple.com/documentation/fileprovider/nsfileprovidererror-swift.struct/code/notauthenticated) · [NSExtensionFileProviderActions](https://developer.apple.com/documentation/bundleresources/information-property-list/nsextension/nsextensionfileprovideractions) (documented for iOS/iPadOS/visionOS only — Task 7.0(b)) · [ASWebAuthenticationSession](https://developer.apple.com/documentation/authenticationservices/aswebauthenticationsession) (oCIS sign-in) · [PreferencePanes](https://developer.apple.com/documentation/preferencepanes) (the rejected alternative — evaluated, not overlooked)
+* Prior art for Phase 7, read verbatim rather than recalled: [nextcloud/desktop `fileprovidersettingscontroller.h`](https://github.com/nextcloud/desktop/blob/master/src/gui/macOS/fileprovidersettingscontroller.h) (app-level settings, `vfsEnabledForAccount`, `resetVfsForAccount`, `performStartupReconciliation` — the drift their design has to repair and ours avoids by treating the domain list as the source of truth) · [their `FileProviderExt/Info.plist`](https://github.com/nextcloud/desktop/blob/master/shell_integration/MacOSX/NextcloudIntegration/FileProviderExt/Info.plist) (seven `NSExtensionFileProviderActions` with SUBQUERY activation rules on macOS, `NSFileProviderDecorations`, and the undocumented `NSExtensionFileProviderAllowsUserControlledEviction` / `NSExtensionFileProviderAllowsContextualMenuDownloadEntry` keys)
 * Sync controls used by the acceptance suite: [testingModes](https://developer.apple.com/documentation/fileprovider/nsfileproviderdomain/testingmodes-swift.property) · [NSFileProviderDomain.TestingModes](https://developer.apple.com/documentation/fileprovider/nsfileproviderdomain/testingmodes-swift.struct) (`.alwaysEnabled`, `.interactive`) · [listAvailableTestingOperations()](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/listavailabletestingoperations()) · [run(\_:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/run(_:)) · [NSFileProviderTestingOperation](https://developer.apple.com/documentation/fileprovider/nsfileprovidertestingoperation) · [waitForStabilization(completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/waitforstabilization(completionhandler:)) · [waitForChanges(below:completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/waitforchanges(below:completionhandler:)) · [reimportItems(below:completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/reimportitems(below:completionhandler:)) · [getUserVisibleURL(for:completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/getuservisibleurl(for:completionhandler:)) · [removeAllDomains(completionHandler:)](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/removealldomains(completionhandler:)) · [DomainRemovalMode](https://developer.apple.com/documentation/fileprovider/nsfileprovidermanager/domainremovalmode) · [isDisconnected](https://developer.apple.com/documentation/fileprovider/nsfileproviderdomain/isdisconnected)
 
 Backend fixtures and prior art for the acceptance suite:
@@ -272,8 +425,15 @@ Still **not** settled by these docs, and flagged inline above: the two
 `/Applications` discovery prerequisite, whether a domain can be added and enumerated on a
 GitHub-hosted macOS runner at all (Task 6.0), how a test process observes an item's
 materialisation state (Task 6.3), the on-disk location of a replicated domain
-(`~/Library/CloudStorage/…` in practice, not documented), and the conflict mechanism a
-replicated provider is expected to produce (Phase 4). All need a Mac to confirm.
+(`~/Library/CloudStorage/…` in practice, not documented), the conflict mechanism a
+replicated provider is expected to produce (Phase 4), and Phase 7's five open questions
+(Task 7.0: process-per-domain, Finder actions on a sidebar domain row, the System Settings
+deep-link anchor, `NSExtensionFileProviderAllowsUserControlledEviction`, and sidebar
+behaviour with ~12 domains). All need a Mac to confirm.
+
+Also searched for and **not found**: any public API for a third-party app to add a pane or
+row to System Settings on macOS 13+. The iCloud entry is first-party UI. Treat any future
+design that assumes otherwise as blocked on evidence, not on effort.
 
 ---
 
@@ -378,3 +538,4 @@ Not present in the client suites, and specific to this platform:
 * *2026-08-17 (CI, PR #2)*: **Backend-contract tier turned green on `ubuntu-latest` — three independent root causes fixed via systematic debugging, each verified before the next.** (1) *Compile error, not a test failure:* `BackendContractTests`' `InsecureTrustDelegate` used `challenge.protectionSpace.serverTrust` + `URLCredential(trust:)`, both Darwin-only, so the whole `OwnCloudCoreTests` target failed to compile on swift-corelibs-foundation and `--filter BackendContract` never ran (reproduced in `swift:6.0-jammy`). Guarded the trust override behind `#if canImport(Security)`, falling through to `.performDefaultHandling` on Linux — Linux `swift build --build-tests` → green. (2) *Bogus healthcheck:* the oCIS fixture's `["CMD","ocis","health"]` exits 3 (`No help topic for 'health'` — no such subcommand in 8.2.0), so `docker compose up --wait` timed out though the server was fully up. Replaced it with a Basic-authed `curl` of `graph/v1.0/me/drives` (proves proxy + IDP + Graph are serving), `retries: 20`, `start_period: 60s`; `up --wait` → `Healthy`. (3) *Self-signed TLS on Linux:* with (1)/(2) fixed the test still couldn't reach oCIS — foundation-on-Linux has no runtime API to trust the fixture cert, and plain http is impossible (oCIS IDP refuses a non-https issuer). Added an oCIS-only CI step that extracts the cert via `openssl s_client` and installs it with `update-ca-certificates`; the cert's SAN already covers `localhost`/`127.0.0.1` (the CI URL). Verified both suites green against the live fixtures from a Linux container: Classic PROPFIND and oCIS `me/drives` pass; macOS unit suite still 204 green (2 contract skipped). Earlier fix from this cycle: the `Load pinned versions` step now greps `KEY=value` lines into `$GITHUB_ENV` (the file's leading `#` comments were rejected as "Invalid format").
 * *2026-08-17 (on a Mac)*: **oCIS drive-id resolution wired into the extension — Task 5.1 async connection path (220 core tests green, 2 skipped).** oCIS is ID-addressed, so `BackendConnection` needs a concrete personal `driveID`, which is only known after an async `GET /me/drives` lookup — but the extension had been building the connection eagerly in `init` with `driveID: nil` (so oCIS enumeration would have hit `drives//root/children`). Test-first core pieces: `GraphRequestBuilder.listDrives()` (`/graph/v1.0/me/drives`) + `GraphRequestBuilder.move(driveID:itemID:newName:newParentID:)` (PATCH, adds `HTTPMethod.patch`); `GraphDrive.personalDrive(in:)` picks the `driveType == "personal"` drive; `DriveResolver` composes list+decode+pick over an injected `RemoteClient` (2 tests: resolves personal id + hits the right URL/auth header; throws `.noPersonalDrive` when absent); `LazyRemoteEnumerationSource` defers building the real source to the first page fetch and memoizes it via an actor, running the factory at most once and *not* caching a failed build (3 tests). Also added `BackendConnection.readBackRequest(path:)`/`readBackItem(fromPropfind:parentIdentifier:)` (Depth:0 PROPFIND read-back) and `moveRequest(itemID:newName:newParentID:)`. Then refactored `FileProviderExtension`: removed the eager `connection` stored property; every handler now obtains its connection via an async `makeConnection()` that resolves (and caches, via a `DriveIDCache` actor) the oCIS personal drive id — Classic still resolves to `driveID = nil`. `enumerator(for:)` (sync) wraps the source in `LazyRemoteEnumerationSource { try await self.makeConnection().enumerationSource(for:) }`; `createItem`/`modifyItem`/`deleteItem` await `makeConnection()` inside their Task, with the create/modify/move helpers rewritten as `async throws -> FileProviderItem` so error mapping is centralised in the public handler. `xcodegen generate` + signed `xcodebuild -scheme App -allowProvisioningUpdates build` → **BUILD SUCCEEDED**, both `.appex` signed. Live oCIS enumeration/CRUD against the fixture remains the Task 6.0 spike (needs a bearer/OIDC credential path).
 * *2026-08-17 (on a Mac)*: **`item(for:)` single-item lookup wired for both backends (228 core tests green, 2 skipped).** The `NSFeatureUnsupportedError` stub is replaced: the root container is answered synthetically (no round-trip, `FileProviderItemDescription.rootContainer`), and any other identifier is fetched from the backend. Test-first core: `GraphRequestBuilder.metadata(driveID:itemID:)` (GET `/items/{id}`, no `/content` suffix) + `BackendConnection.itemMetadataRequest(itemID:)` — 2 tests. The extension's `fetchItem` routes per backend: oCIS decodes the returned driveItem (which carries its own `parentReference.id`); Classic reuses the Depth:0 PROPFIND read-back, deriving the parent by dropping the identifier-path's last segment (`.rootContainer` for a child of root) since WebDAV hrefs carry no parent id, and maps an empty multistatus to `.noSuchItem`. Signed `xcodebuild -scheme App -allowProvisioningUpdates build` → **BUILD SUCCEEDED**, both `.appex` signed. (The Classic path-vs-`oc:id` identifier tension noted under Task 4.4 applies here too and is part of the Task 6.0 live reconciliation.)
+* *2026-08-17 (design)*: **Phase 7 (user-facing configuration) designed and added; nothing implemented yet.** Spec at `docs/superpowers/specs/2026-08-17-fileprovider-configuration-design.md` (git-ignored per repo hygiene — read it before starting Phase 7; it carries the arguments, the wireframe, and the alternatives that were rejected). Six decisions worth recording because they are hard to re-derive: (1) **The premise that started this — "iCloud puts an entry in System Settings, so we do too" — is not achievable.** macOS 13+ exposes no public API for a third party to add to System Settings; iCloud's entry is first-party UI. Configuration lives in the containing app, which macOS already forces into `/Applications` (Task 5.1). A `/Library/PreferencePanes` bundle was evaluated and rejected. (2) **One `NSFileProviderDomain` per oCIS space** (Classic = one domain over its files root), because `BackendConnection.swift:19` already resolves exactly one drive per domain — so per-space domains cost almost nothing, while a single domain with a synthetic space level would mean inventing a virtual hierarchy the enumerator does not have. (3) **Splitting identity:** `AccountDescriptor.domainIdentifier` currently keys both the domain (`DomainAdapter.swift:12`) and the Keychain item (`KeychainCredentialStore.swift:47`); under per-space domains that would give every space its own refresh token, so the property becomes `accountIdentifier` (credential identity, no Keychain migration) and a new `SyncRoot` owns `"<driveID>|<accountIdentifier>"` (domain identity), drive-first so the username stays the verbatim tail. (4) **Found a live bug while designing:** `FileProviderExtension.swift:34` hardcodes `driveID: nil`, so every oCIS Graph request builds `drives//…`. Task 7.1 fixes it; the Phase 3 gate depends on that too. (5) **No persisted "selected spaces" setting** — `getDomainsWithCompletionHandler` is the source of truth, so selection is a lifecycle operation, not state to keep in sync (Nextcloud ships `resetVfsForAccount`/`performStartupReconciliation` precisely to repair the drift a parallel list creates). What is stored is an account registry (so a zero-space account does not vanish) plus a display-only catalog cache. (6) **Per-space domains create a real refresh-token race** — N extension instances over one rotating oCIS token — fixed by cross-process `flock` double-checked locking (Task 7.6), which does not count as done without the end-to-end scenario in Task 7.10. Argued **out** of v1 with reasons: known-folder claim (`claimKnownFolders` is per-domain, so "which space owns your Desktop?" has no answer, and the failure mode is irreversible movement of user data), MDM/managed prefs, menu bar item, custom per-item Finder actions, Classic folder selection, bandwidth/ignore-list/log-level settings. Five assumptions remain unverified and are Task 7.0, deliberately placed first so they cannot silently become facts.
