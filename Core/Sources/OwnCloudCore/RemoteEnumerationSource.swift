@@ -32,6 +32,50 @@ public func enumerateAll(from source: RemoteEnumerationSource) async throws -> E
     return EnumerationResult(items: items, anchor: latestAnchor)
 }
 
+/// Defers building the underlying ``RemoteEnumerationSource`` until the first
+/// page is fetched, then caches it. Needed because oCIS enumeration needs a
+/// `driveID` that is only known after an async `me/drives` lookup, while the Mac
+/// enumerator builds its source synchronously — this bridges the two by taking an
+/// async factory. The factory runs at most once even under concurrent fetches.
+public struct LazyRemoteEnumerationSource: RemoteEnumerationSource {
+
+    private let cache: SourceCache
+
+    public init(_ makeSource: @escaping @Sendable () async throws -> RemoteEnumerationSource) {
+        self.cache = SourceCache(makeSource)
+    }
+
+    public func fetchPage(cursor: PageCursor?) async throws -> EnumerationPage {
+        let source = try await cache.source()
+        return try await source.fetchPage(cursor: cursor)
+    }
+
+    /// Serializes construction so the factory runs once; a second caller awaits the
+    /// same in-flight build rather than starting its own.
+    private actor SourceCache {
+        private let makeSource: @Sendable () async throws -> RemoteEnumerationSource
+        private var built: Task<RemoteEnumerationSource, Error>?
+
+        init(_ makeSource: @escaping @Sendable () async throws -> RemoteEnumerationSource) {
+            self.makeSource = makeSource
+        }
+
+        func source() async throws -> RemoteEnumerationSource {
+            if let built { return try await built.value }
+            let task = Task { try await makeSource() }
+            built = task
+            do {
+                return try await task.value
+            } catch {
+                // Don't cache a failed build — a later fetch may succeed (e.g. once
+                // credentials are present).
+                built = nil
+                throw error
+            }
+        }
+    }
+}
+
 /// Enumerates an ownCloud Classic (WebDAV) container: a single `PROPFIND Depth:1`
 /// listing the immediate children. Classic has no delta API and returns every
 /// child at once, so there is exactly one page and the sync anchor is synthesized
