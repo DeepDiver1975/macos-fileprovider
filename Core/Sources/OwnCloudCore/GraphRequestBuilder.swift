@@ -33,6 +33,13 @@ public struct GraphRequestBuilder {
         return name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name
     }
 
+    /// List the signed-in user's drives (`GET /me/drives`) — used at sign-in to
+    /// resolve which drive the domain maps to (the personal drive).
+    public func listDrives() -> RemoteRequest {
+        let url = URL(string: baseURL.absoluteString + "/graph/v1.0/me/drives") ?? baseURL
+        return RemoteRequest(method: .get, url: url)
+    }
+
     public func fetchContents(driveID: String, itemID: String) -> RemoteRequest {
         RemoteRequest(method: .get, url: itemURL(driveID: driveID, itemID: itemID, suffix: "/content"))
     }
@@ -50,6 +57,12 @@ public struct GraphRequestBuilder {
 
     public func delete(driveID: String, itemID: String) -> RemoteRequest {
         RemoteRequest(method: .delete, url: itemURL(driveID: driveID, itemID: itemID))
+    }
+
+    /// Fetch a single driveItem's metadata (`GET /items/{id}`, no `/content`) —
+    /// the response is one driveItem, decoded for `item(for:)` single-item lookup.
+    public func metadata(driveID: String, itemID: String) -> RemoteRequest {
+        RemoteRequest(method: .get, url: itemURL(driveID: driveID, itemID: itemID))
     }
 
     /// List the drive root for enumeration (Phase 3). The first page is a plain
@@ -91,6 +104,25 @@ public struct GraphRequestBuilder {
     /// root-parent form of ``createFolder(driveID:parentID:name:)``.
     public func createFolderUnderRoot(driveID: String, name: String) -> RemoteRequest {
         folderRequest(url: rootURL(driveID: driveID, suffix: "/children"), name: name)
+    }
+
+    /// PATCH the item to rename and/or reparent it — the ID-addressed counterpart
+    /// of WebDAV `MOVE`. `name` sets the new filename; `newParentID`, when given,
+    /// moves the item under a different parent via `parentReference.id`. A pure
+    /// rename omits `parentReference`.
+    public func move(driveID: String, itemID: String, newName: String, newParentID: String?) -> RemoteRequest {
+        var body: [String: Any] = ["name": newName]
+        if let newParentID {
+            body["parentReference"] = ["id": newParentID]
+        }
+        let json = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
+        return RemoteRequest(
+            method: .patch,
+            url: itemURL(driveID: driveID, itemID: itemID),
+            headers: ["Content-Type": "application/json"],
+            hasBody: true,
+            jsonBody: json
+        )
     }
 
     private func folderRequest(url: URL, name: String) -> RemoteRequest {

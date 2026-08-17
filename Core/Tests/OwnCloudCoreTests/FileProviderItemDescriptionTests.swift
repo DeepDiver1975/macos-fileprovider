@@ -26,7 +26,7 @@ final class FileProviderItemDescriptionTests: XCTestCase {
 
     func testWebDAVFileMapsToDescription() throws {
         let item = WebDAVItem(
-            href: "/remote.php/dav/files/admin/report.pdf",
+            href: "/remote.php/dav/files/admin/folder/report.pdf",
             isDirectory: false,
             fileID: "00000016ocobzus5kn6s",
             etag: "\"abc123\"",
@@ -35,10 +35,13 @@ final class FileProviderItemDescriptionTests: XCTestCase {
             lastModified: Date(timeIntervalSince1970: 1_000_000),
             permissions: "RDNVW"
         )
-        let parent = ItemIdentifier(rawValue: "00000015ocobzus5kn6s")
+        // Classic is path-addressed: the parent identifier is the parent's
+        // server-relative path, and the item's identifier is that path joined with
+        // its name — not its oc:id (see FileProviderItemDescription for why).
+        let parent = ItemIdentifier(rawValue: "/folder")
         let desc = FileProviderItemDescription(webDAVItem: item, parentIdentifier: parent)
 
-        XCTAssertEqual(desc.identifier, ItemIdentifier(rawValue: "00000016ocobzus5kn6s"))
+        XCTAssertEqual(desc.identifier, ItemIdentifier(rawValue: "/folder/report.pdf"))
         XCTAssertEqual(desc.parentIdentifier, parent)
         XCTAssertEqual(desc.filename, "report.pdf")
         XCTAssertFalse(desc.isDirectory)

@@ -59,6 +59,46 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertEqual(request.url.absoluteString, "https://cloud.test/remote.php/dav/files/admin/folder/a.txt")
     }
 
+    func testClassicSubfolderEnumerationTargetsItsPathNotItsOCID() async throws {
+        // Regression (Task 6.0 live spike): descending into a subfolder must
+        // PROPFIND that folder's server-relative PATH. Classic is path-addressed,
+        // so an enumerated subfolder's identifier is its path (e.g. "/Documents"),
+        // NOT its oc:id — every Classic consumer (fetch/delete/move/subfolder
+        // enumeration) treats the identifier as a path, so an oc:id identifier
+        // would make the subfolder PROPFIND hit <files-root>/<oc:id>, a
+        // nonexistent URL that hangs. Only the root worked because its path is
+        // hardcoded to "/".
+        var urls: [String] = []
+        let account = AccountDescriptor(backend: .classic, serverURL: URL(string: "https://cloud.test")!, username: "admin")
+        let rootBody = Data("""
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+          <d:response><d:href>/remote.php/dav/files/admin/</d:href>
+            <d:propstat><d:prop><oc:id>root</oc:id><d:resourcetype><d:collection/></d:resourcetype></d:prop>
+            <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+          <d:response><d:href>/remote.php/dav/files/admin/Documents/</d:href>
+            <d:propstat><d:prop><oc:id>00000011ocsqdq7l97u2</oc:id><d:resourcetype><d:collection/></d:resourcetype></d:prop>
+            <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+        </d:multistatus>
+        """.utf8)
+        let connection = BackendConnection(
+            account: account,
+            client: client(status: 207, body: rootBody, capture: { urls.append($0.url!.absoluteString) }),
+            authorization: "Basic abc"
+        )
+
+        // Enumerate root and find the Documents folder.
+        let rootPage = try await connection.enumerationSource(for: .rootContainer).fetchPage(cursor: nil)
+        let documents = try XCTUnwrap(rootPage.items.first)
+        XCTAssertEqual(documents.filename, "Documents")
+        // Its identifier is the server-relative PATH, so subfolder ops address it.
+        XCTAssertEqual(documents.identifier, ItemIdentifier(rawValue: "/Documents"))
+
+        // Descend: the subfolder PROPFIND must hit the Documents PATH, not its oc:id.
+        _ = try await connection.enumerationSource(for: documents.identifier).fetchPage(cursor: nil)
+        XCTAssertEqual(urls.last, "https://cloud.test/remote.php/dav/files/admin/Documents")
+    }
+
     // MARK: Graph (oCIS) — ID-addressed
 
     func testOCISRootEnumerationTargetsTheDriveChildren() async throws {
@@ -133,6 +173,60 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertEqual(request.headers["Overwrite"], "F")
     }
 
+    func testClassicReadBackTargetsThePathWithDepthZeroPropfind() {
+        // Classic create has no metadata body, so createItem reads the new item
+        // back with a Depth:0 PROPFIND on its path.
+        let request = classicConnection().readBackRequest(path: "/folder/new.txt")
+
+        XCTAssertEqual(request.method, .propfind)
+        XCTAssertEqual(request.headers["Depth"], "0")
+        XCTAssertEqual(request.url.absoluteString, "https://cloud.test/remote.php/dav/files/admin/folder/new.txt")
+    }
+
+    func testClassicReadBackParsesTheSingleItemUnderTheGivenParent() throws {
+        let body = Data("""
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+          <d:response><d:href>/remote.php/dav/files/admin/folder/new.txt</d:href>
+            <d:propstat><d:prop>
+              <oc:id>server-id-42</oc:id>
+              <d:resourcetype/>
+              <d:getetag>"etag-after-put"</d:getetag>
+              <d:getcontentlength>5</d:getcontentlength>
+              <d:getcontenttype>text/plain</d:getcontenttype>
+            </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+        </d:multistatus>
+        """.utf8)
+
+        let description = try classicConnection().readBackItem(
+            fromPropfind: body,
+            parentIdentifier: ItemIdentifier(rawValue: "/folder")
+        )
+
+        // The etag is what createItem could not know before the read-back; the
+        // parent is supplied by the caller (WebDAV hrefs don't carry it). The
+        // identifier is the item's server-relative PATH (path-addressed backend),
+        // i.e. the parent path joined with the name — not the oc:id.
+        XCTAssertEqual(description?.identifier, ItemIdentifier(rawValue: "/folder/new.txt"))
+        XCTAssertEqual(description?.filename, "new.txt")
+        XCTAssertEqual(description?.versionIdentifier, "\"etag-after-put\"")
+        XCTAssertEqual(description?.parentIdentifier, ItemIdentifier(rawValue: "/folder"))
+        XCTAssertEqual(description?.isDirectory, false)
+    }
+
+    func testClassicReadBackReturnsNilForEmptyMultistatus() throws {
+        let body = Data("""
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:"></d:multistatus>
+        """.utf8)
+
+        let description = try classicConnection().readBackItem(
+            fromPropfind: body, parentIdentifier: .rootContainer
+        )
+
+        XCTAssertNil(description)
+    }
+
     // MARK: Push request shaping — oCIS (ID-addressed)
 
     private func ocisConnection() -> BackendConnection {
@@ -154,6 +248,23 @@ final class BackendConnectionTests: XCTestCase {
 
         XCTAssertEqual(request.method, .delete)
         XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
+    }
+
+    func testOCISItemMetadataGetsTheItem() {
+        let request = ocisConnection().itemMetadataRequest(itemID: "item-9")
+
+        XCTAssertEqual(request.method, .get)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
+    }
+
+    func testOCISMovePatchesItemWithNameAndParent() throws {
+        let request = ocisConnection().moveRequest(itemID: "item-9", newName: "renamed.txt", newParentID: "parent-2")
+
+        XCTAssertEqual(request.method, .patch)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: request.jsonBody ?? Data()) as? [String: Any])
+        XCTAssertEqual(json["name"] as? String, "renamed.txt")
+        XCTAssertEqual((json["parentReference"] as? [String: Any])?["id"] as? String, "parent-2")
     }
 
     func testOCISCreateFolderPostsToParentChildren() {

@@ -53,6 +53,22 @@ final class GraphModelsTests: XCTestCase {
         XCTAssertEqual(drives[1].driveType, "virtual")
     }
 
+    func testPersonalDriveSelectsThePersonalTypeFromAList() throws {
+        // Drive-id resolution: the domain maps to the user's personal drive.
+        let drives = [
+            GraphDrive(id: "shares-id", name: "Shares", driveType: "virtual", driveAlias: nil, quota: nil, root: nil),
+            GraphDrive(id: "personal-id", name: "Admin", driveType: "personal", driveAlias: nil, quota: nil, root: nil),
+        ]
+        XCTAssertEqual(GraphDrive.personalDrive(in: drives)?.id, "personal-id")
+    }
+
+    func testPersonalDriveIsNilWhenNoPersonalDrivePresent() throws {
+        let drives = [
+            GraphDrive(id: "shares-id", name: "Shares", driveType: "virtual", driveAlias: nil, quota: nil, root: nil),
+        ]
+        XCTAssertNil(GraphDrive.personalDrive(in: drives))
+    }
+
     // MARK: - Children list
 
     func testDecodesChildrenList() throws {

@@ -64,22 +64,40 @@ public struct AccountDescriptor: Sendable, Equatable {
     /// computed property below. The extension receives only the domain (carrying
     /// this identifier) and must rebuild the account to construct a backend source.
     ///
-    /// Only the first two `|` are structural (backend, serverURL); the remainder is
-    /// the username verbatim, so a `|` inside the username survives. Returns `nil`
-    /// if the backend token or the server URL does not parse.
+    /// The three `|`-separated segments are backend, percent-encoded serverURL, and
+    /// percent-encoded username (see ``domainIdentifier`` for why they are encoded).
+    /// Returns `nil` if there are not exactly three segments, the backend token is
+    /// unknown, or the server URL does not parse.
     public init?(domainIdentifier: String) {
-        let parts = domainIdentifier.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+        let parts = domainIdentifier.split(separator: "|", omittingEmptySubsequences: false)
         guard parts.count == 3,
               let backend = Backend(rawValue: String(parts[0])),
-              let serverURL = URL(string: String(parts[1]))
+              let serverString = String(parts[1]).removingPercentEncoding,
+              let serverURL = URL(string: serverString),
+              let username = String(parts[2]).removingPercentEncoding
         else { return nil }
-        self.init(backend: backend, serverURL: serverURL, username: String(parts[2]))
+        self.init(backend: backend, serverURL: serverURL, username: username)
     }
 
     /// Stable identifier for the domain — same account, same id across launches,
     /// so the system reuses the existing domain rather than duplicating it.
+    ///
+    /// `NSFileProviderDomain` forbids `/` and `:` in the identifier
+    /// (`NSFileProviderDomain.h`), so `add(domain:)` rejects a raw server URL
+    /// (which always contains both) with `EINVAL`. The serverURL and username
+    /// segments are therefore percent-encoded — the encoding also escapes `|`, so
+    /// each of the three segments is unambiguous.
     public var domainIdentifier: String {
-        "\(backend.rawValue)|\(serverURL.absoluteString)|\(username)"
+        "\(backend.rawValue)|\(Self.encodeSegment(serverURL.absoluteString))|\(Self.encodeSegment(username))"
+    }
+
+    /// Percent-encode a segment so it carries none of the identifier's structural
+    /// or forbidden characters (`|`, `/`, `:`). The allowed set is the URL
+    /// unreserved set, which excludes all three.
+    private static func encodeSegment(_ value: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
     /// User-facing domain name, e.g. `einstein@ocis.test`.

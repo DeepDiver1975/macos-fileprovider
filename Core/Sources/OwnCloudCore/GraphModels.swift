@@ -11,6 +11,12 @@ public struct GraphDrive: Equatable, Sendable {
     public let driveAlias: String?
     public let quota: GraphQuota?
     public let root: GraphDriveRoot?
+
+    /// The user's personal drive from a `me/drives` listing — the one the domain
+    /// maps to. oCIS tags it `driveType == "personal"`; `nil` if none is present.
+    public static func personalDrive(in drives: [GraphDrive]) -> GraphDrive? {
+        drives.first { $0.driveType == "personal" }
+    }
 }
 
 public struct GraphQuota: Equatable, Sendable {

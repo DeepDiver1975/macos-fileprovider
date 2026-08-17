@@ -93,6 +93,14 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f"))
     }
 
+    func testGraphMetadataIsGetOnItemWithoutContentSuffix() {
+        // Single-item lookup (`item(for:)`) fetches the driveItem's metadata — a
+        // GET on the item itself, not on `/content`.
+        let req = graph.metadata(driveID: driveID, itemID: "x!f")
+        XCTAssertEqual(req.method, .get)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f"))
+    }
+
     func testGraphCreateFolderPostsToParentChildren() {
         let req = graph.createFolder(driveID: driveID, parentID: "x!root", name: "New Folder")
         XCTAssertEqual(req.method, .post)
@@ -126,6 +134,37 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertTrue(req.hasBody)
     }
 
+    func testGraphListDrivesIsGetOnMeDrives() {
+        // Drive-id resolution at sign-in: list the user's drives to find the
+        // personal one the domain maps to.
+        let req = graph.listDrives()
+        XCTAssertEqual(req.method, .get)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/me/drives"))
+        XCTAssertFalse(req.hasBody)
+    }
+
+    func testGraphMoveIsPatchWithNameAndParentReference() throws {
+        // Graph rename/move is a PATCH on the item carrying the new name and/or a
+        // new parentReference.id — the ID-addressed counterpart of WebDAV MOVE.
+        let req = graph.move(driveID: driveID, itemID: "x!f", newName: "renamed.txt", newParentID: "y!parent")
+        XCTAssertEqual(req.method, .patch)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f"))
+        XCTAssertEqual(req.headers["Content-Type"], "application/json")
+        XCTAssertTrue(req.hasBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: req.jsonBody ?? Data()) as? [String: Any])
+        XCTAssertEqual(json["name"] as? String, "renamed.txt")
+        let parentRef = try XCTUnwrap(json["parentReference"] as? [String: Any])
+        XCTAssertEqual(parentRef["id"] as? String, "y!parent")
+    }
+
+    func testGraphMoveOmitsParentReferenceForPureRename() throws {
+        // A rename in place carries only the name, no parentReference.
+        let req = graph.move(driveID: driveID, itemID: "x!f", newName: "renamed.txt", newParentID: nil)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: req.jsonBody ?? Data()) as? [String: Any])
+        XCTAssertEqual(json["name"] as? String, "renamed.txt")
+        XCTAssertNil(json["parentReference"])
+    }
+
     // MARK: - Enumeration requests (Phase 3)
 
     func testWebDAVEnumerateIsPropfindDepthOne() {
@@ -150,6 +189,32 @@ final class RemoteRequestBuilderTests: XCTestCase {
             XCTAssertTrue(body.contains(prop), "missing \(prop)")
         }
         XCTAssertTrue(body.contains("xmlns:oc=\"http://owncloud.org/ns\""))
+    }
+
+    func testWebDAVPropertiesIsPropfindDepthZeroAtItemPath() {
+        // Classic returns no metadata body on PUT/MKCOL, so createItem reads the
+        // new item back with a Depth:0 PROPFIND on its own path (just that item,
+        // not its children).
+        let req = dav.properties(path: "/new.txt")
+        XCTAssertEqual(req.method, .propfind)
+        XCTAssertEqual(req.url, URL(string: "https://cloud.test/remote.php/dav/files/admin/new.txt"))
+        XCTAssertEqual(req.headers["Depth"], "0")
+        XCTAssertEqual(req.headers["Content-Type"], "application/xml")
+        XCTAssertTrue(req.hasBody)
+    }
+
+    func testWebDAVPropertiesBodyRequestsTheParsedProperties() {
+        // The read-back must ask for exactly the props WebDAVMultiStatusParser
+        // reads — the same body the Depth:1 enumerate PROPFIND uses.
+        let req = dav.properties(path: "/new.txt")
+        let body = String(data: req.jsonBody ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertTrue(body.contains("<d:propfind"))
+        for prop in ["d:getetag", "d:getcontentlength", "d:getcontenttype", "d:getlastmodified", "d:resourcetype"] {
+            XCTAssertTrue(body.contains(prop), "missing \(prop)")
+        }
+        for prop in ["oc:id", "oc:size", "oc:permissions"] {
+            XCTAssertTrue(body.contains(prop), "missing \(prop)")
+        }
     }
 
     func testGraphEnumerateFirstPageIsGetOnRootChildren() {

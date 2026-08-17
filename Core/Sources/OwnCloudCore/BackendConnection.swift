@@ -113,6 +113,27 @@ public struct BackendConnection {
         webDAVBuilder.move(fromPath: fromPath, toPath: toPath)
     }
 
+    /// WebDAV metadata read-back (Classic): a `Depth:0` PROPFIND at the item's
+    /// path. `createItem`/`modifyItem` need this because a `PUT`/`MKCOL` returns
+    /// no metadata body, so the server-assigned id and etag are only knowable by
+    /// reading the item back.
+    public func readBackRequest(path: String) -> RemoteRequest {
+        webDAVBuilder.properties(path: path)
+    }
+
+    /// Parse the single item from a Classic read-back PROPFIND body into a
+    /// description under `parentIdentifier` (WebDAV hrefs don't carry a parent,
+    /// so the caller supplies it). Returns `nil` if the multi-status has no
+    /// entry — e.g. the item vanished between the write and the read-back.
+    public func readBackItem(
+        fromPropfind body: Data,
+        parentIdentifier: ItemIdentifier
+    ) throws -> FileProviderItemDescription? {
+        let items = try WebDAVMultiStatusParser().parse(body)
+        guard let item = items.first else { return nil }
+        return FileProviderItemDescription(webDAVItem: item, parentIdentifier: parentIdentifier)
+    }
+
     // MARK: Push operations — oCIS (ID-addressed)
 
     /// Graph content modify (oCIS): a PUT on `/items/{id}/content` with an
@@ -124,6 +145,19 @@ public struct BackendConnection {
     /// Graph delete (oCIS): DELETE on `/items/{id}`.
     public func deleteRequest(itemID: String) -> RemoteRequest {
         graphBuilder.delete(driveID: driveID ?? "", itemID: itemID)
+    }
+
+    /// Graph single-item metadata (oCIS): GET on `/items/{id}` — the response is
+    /// one driveItem, decoded via `GraphJSONDecoder.decodeItem` for `item(for:)`.
+    public func itemMetadataRequest(itemID: String) -> RemoteRequest {
+        graphBuilder.metadata(driveID: driveID ?? "", itemID: itemID)
+    }
+
+    /// Graph move/rename (oCIS): PATCH the item with a new name and, when moving
+    /// to a different container, the new `parentReference.id`. The ID-addressed
+    /// counterpart of Classic's ``moveRequest(fromPath:toPath:)``.
+    public func moveRequest(itemID: String, newName: String, newParentID: String?) -> RemoteRequest {
+        graphBuilder.move(driveID: driveID ?? "", itemID: itemID, newName: newName, newParentID: newParentID)
     }
 
     /// Graph folder create (oCIS): POST a folder driveItem to the parent's

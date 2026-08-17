@@ -5,6 +5,7 @@ public enum HTTPMethod: String, Sendable, Equatable {
     case get = "GET"
     case put = "PUT"
     case post = "POST"
+    case patch = "PATCH"
     case delete = "DELETE"
     case mkcol = "MKCOL"
     case move = "MOVE"
