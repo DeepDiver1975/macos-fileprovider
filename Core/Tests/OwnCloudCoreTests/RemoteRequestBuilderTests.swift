@@ -126,6 +126,28 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertTrue(req.hasBody)
     }
 
+    func testGraphMoveIsPatchWithNameAndParentReference() throws {
+        // Graph rename/move is a PATCH on the item carrying the new name and/or a
+        // new parentReference.id — the ID-addressed counterpart of WebDAV MOVE.
+        let req = graph.move(driveID: driveID, itemID: "x!f", newName: "renamed.txt", newParentID: "y!parent")
+        XCTAssertEqual(req.method, .patch)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f"))
+        XCTAssertEqual(req.headers["Content-Type"], "application/json")
+        XCTAssertTrue(req.hasBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: req.jsonBody ?? Data()) as? [String: Any])
+        XCTAssertEqual(json["name"] as? String, "renamed.txt")
+        let parentRef = try XCTUnwrap(json["parentReference"] as? [String: Any])
+        XCTAssertEqual(parentRef["id"] as? String, "y!parent")
+    }
+
+    func testGraphMoveOmitsParentReferenceForPureRename() throws {
+        // A rename in place carries only the name, no parentReference.
+        let req = graph.move(driveID: driveID, itemID: "x!f", newName: "renamed.txt", newParentID: nil)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: req.jsonBody ?? Data()) as? [String: Any])
+        XCTAssertEqual(json["name"] as? String, "renamed.txt")
+        XCTAssertNil(json["parentReference"])
+    }
+
     // MARK: - Enumeration requests (Phase 3)
 
     func testWebDAVEnumerateIsPropfindDepthOne() {

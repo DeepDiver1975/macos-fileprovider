@@ -226,42 +226,106 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
     ) -> Progress {
-        // Phase 4, Task 4.4. Content edits are the core sync operation and are
-        // wired here: PUT the new bytes with an `If-Match` on the base version's
-        // etag (optimistic concurrency), then reconcile. Rename/move (a
-        // `.filename`/`.parentItemIdentifier` change) still needs an oCIS move
-        // request shaped in the core, so those fields stay unsupported for now.
+        // Phase 4, Task 4.4. Two change kinds are wired: a content edit (PUT the
+        // new bytes with an `If-Match` on the base version's etag, then reconcile)
+        // and a rename/move (`.filename`/`.parentItemIdentifier` — WebDAV MOVE /
+        // Graph PATCH). A single call carrying both is handled as content-first;
+        // combined atomic rename+content is a follow-up.
         guard let connection else {
             completionHandler(nil, [], false, NSFileProviderError(.notAuthenticated))
             return Progress()
         }
-        guard changedFields.contains(.contents) else {
-            completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
-            return Progress()
-        }
 
-        // The base version's content token is the etag the system last saw; send
-        // it as `If-Match` so a server-side change since then fails the write
-        // rather than silently clobbering it.
         let etag = String(data: version.contentVersion, encoding: .utf8).flatMap { $0.isEmpty ? nil : $0 }
         let identifier = item.itemIdentifier
         let parent: ItemIdentifier = item.parentItemIdentifier == .rootContainer
             ? .rootContainer
             : ItemIdentifier(rawValue: item.parentItemIdentifier.rawValue)
 
-        switch connection.account.backend {
-        case .ocis:
-            modifyContentsOCIS(
-                connection: connection, itemID: identifier.rawValue, etag: etag,
-                contents: newContents, completionHandler: completionHandler
+        if changedFields.contains(.contents) {
+            // The base version's content token is the etag the system last saw;
+            // send it as `If-Match` so a server-side change since then fails the
+            // write rather than silently clobbering it.
+            switch connection.account.backend {
+            case .ocis:
+                modifyContentsOCIS(
+                    connection: connection, itemID: identifier.rawValue, etag: etag,
+                    contents: newContents, completionHandler: completionHandler
+                )
+            case .classic:
+                modifyContentsClassic(
+                    connection: connection, path: identifier.rawValue, parent: parent, etag: etag,
+                    contents: newContents, completionHandler: completionHandler
+                )
+            }
+        } else if changedFields.contains(.filename) || changedFields.contains(.parentItemIdentifier) {
+            moveItem(
+                connection: connection, item: item, changedFields: changedFields,
+                parent: parent, completionHandler: completionHandler
             )
-        case .classic:
-            modifyContentsClassic(
-                connection: connection, path: identifier.rawValue, parent: parent, etag: etag,
-                contents: newContents, completionHandler: completionHandler
-            )
+        } else {
+            completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
         }
         return Progress()
+    }
+
+    /// Rename and/or move an item: WebDAV `MOVE` (path-addressed) for Classic and
+    /// Graph `PATCH` (id-addressed) for oCIS. The reparent target is only sent
+    /// when `.parentItemIdentifier` actually changed, so a pure rename stays in
+    /// place.
+    private func moveItem(
+        connection: BackendConnection,
+        item: NSFileProviderItem,
+        changedFields: NSFileProviderItemFields,
+        parent: ItemIdentifier,
+        completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
+    ) {
+        let newName = item.filename
+        let parentChanged = changedFields.contains(.parentItemIdentifier)
+        let client = self.client
+        let auth = FileProviderExtension.authorization(for: account)
+
+        switch connection.account.backend {
+        case .ocis:
+            let moveRequest = connection.moveRequest(
+                itemID: item.itemIdentifier.rawValue,
+                newName: newName,
+                newParentID: parentChanged ? parent.rawValue : nil
+            )
+            Task {
+                do {
+                    let body = try await client.send(moveRequest, authorization: auth)
+                    let updated = try GraphJSONDecoder().decodeItem(body)
+                    completionHandler(FileProviderItem(itemDescription: FileProviderItemDescription(graphItem: updated)), [], false, nil)
+                } catch let error as RemoteError {
+                    completionHandler(nil, [], false, error.asFileProviderError)
+                } catch {
+                    completionHandler(nil, [], false, error)
+                }
+            }
+        case .classic:
+            // WebDAV is path-addressed: the destination path is the new parent's
+            // path joined with the new filename. Root is served at "/".
+            let parentPath = item.parentItemIdentifier == .rootContainer ? "" : parent.rawValue
+            let toPath = parentPath + "/" + newName
+            let moveRequest = connection.moveRequest(fromPath: item.itemIdentifier.rawValue, toPath: toPath)
+            let readBackRequest = connection.readBackRequest(path: toPath)
+            Task {
+                do {
+                    _ = try await client.send(moveRequest, authorization: auth)
+                    let body = try await client.send(readBackRequest, authorization: auth)
+                    guard let description = try connection.readBackItem(fromPropfind: body, parentIdentifier: parent) else {
+                        completionHandler(nil, [], false, NSFileProviderError(.serverUnreachable))
+                        return
+                    }
+                    completionHandler(FileProviderItem(itemDescription: description), [], false, nil)
+                } catch let error as RemoteError {
+                    completionHandler(nil, [], false, error.asFileProviderError)
+                } catch {
+                    completionHandler(nil, [], false, error)
+                }
+            }
+        }
     }
 
     /// oCIS content modify: PUT on `/items/{id}/content` returns the updated
