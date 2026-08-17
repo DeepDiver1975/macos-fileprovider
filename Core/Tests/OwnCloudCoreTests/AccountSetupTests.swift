@@ -53,9 +53,26 @@ final class AccountSetupTests: XCTestCase {
             serverURL: URL(string: "https://ocis.test")!,
             username: "einstein"
         )
-        // Domain identifier is stable across launches for the same account.
-        XCTAssertEqual(account.domainIdentifier, "ocis|https://ocis.test|einstein")
+        // Domain identifier is stable across launches for the same account. The
+        // server URL is percent-encoded so the identifier carries no '/' or ':'.
+        XCTAssertEqual(account.domainIdentifier, "ocis|https%3A%2F%2Focis.test|einstein")
         XCTAssertEqual(account.displayName, "einstein@ocis.test")
+    }
+
+    func testDomainIdentifierContainsNoForbiddenCharacters() {
+        // NSFileProviderDomain forbids '/' and ':' in the identifier
+        // (NSFileProviderDomain.h). A raw server URL always contains both, so the
+        // identifier must encode them away or add(domain:) fails with EINVAL.
+        let account = AccountDescriptor(
+            backend: .classic,
+            serverURL: URL(string: "http://localhost:8080")!,
+            username: "admin"
+        )
+        let identifier = account.domainIdentifier
+        XCTAssertFalse(identifier.contains("/"), "identifier must not contain '/': \(identifier)")
+        XCTAssertFalse(identifier.contains(":"), "identifier must not contain ':': \(identifier)")
+        // And it still round-trips back to the same account.
+        XCTAssertEqual(AccountDescriptor(domainIdentifier: identifier), account)
     }
 
     func testAccountDescriptorDisplayNameUsesHost() {
