@@ -209,6 +209,16 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
     }
 
+    func testOCISMovePatchesItemWithNameAndParent() throws {
+        let request = ocisConnection().moveRequest(itemID: "item-9", newName: "renamed.txt", newParentID: "parent-2")
+
+        XCTAssertEqual(request.method, .patch)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: request.jsonBody ?? Data()) as? [String: Any])
+        XCTAssertEqual(json["name"] as? String, "renamed.txt")
+        XCTAssertEqual((json["parentReference"] as? [String: Any])?["id"] as? String, "parent-2")
+    }
+
     func testOCISCreateFolderPostsToParentChildren() {
         let request = ocisConnection().createFolderRequest(parentID: "parent-1", name: "New Folder")
 

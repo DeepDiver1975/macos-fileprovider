@@ -93,6 +93,25 @@ public struct GraphRequestBuilder {
         folderRequest(url: rootURL(driveID: driveID, suffix: "/children"), name: name)
     }
 
+    /// PATCH the item to rename and/or reparent it — the ID-addressed counterpart
+    /// of WebDAV `MOVE`. `name` sets the new filename; `newParentID`, when given,
+    /// moves the item under a different parent via `parentReference.id`. A pure
+    /// rename omits `parentReference`.
+    public func move(driveID: String, itemID: String, newName: String, newParentID: String?) -> RemoteRequest {
+        var body: [String: Any] = ["name": newName]
+        if let newParentID {
+            body["parentReference"] = ["id": newParentID]
+        }
+        let json = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
+        return RemoteRequest(
+            method: .patch,
+            url: itemURL(driveID: driveID, itemID: itemID),
+            headers: ["Content-Type": "application/json"],
+            hasBody: true,
+            jsonBody: json
+        )
+    }
+
     private func folderRequest(url: URL, name: String) -> RemoteRequest {
         let body: [String: Any] = [
             "name": name,

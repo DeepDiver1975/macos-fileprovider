@@ -147,6 +147,13 @@ public struct BackendConnection {
         graphBuilder.delete(driveID: driveID ?? "", itemID: itemID)
     }
 
+    /// Graph move/rename (oCIS): PATCH the item with a new name and, when moving
+    /// to a different container, the new `parentReference.id`. The ID-addressed
+    /// counterpart of Classic's ``moveRequest(fromPath:toPath:)``.
+    public func moveRequest(itemID: String, newName: String, newParentID: String?) -> RemoteRequest {
+        graphBuilder.move(driveID: driveID ?? "", itemID: itemID, newName: newName, newParentID: newParentID)
+    }
+
     /// Graph folder create (oCIS): POST a folder driveItem to the parent's
     /// `/children` collection.
     public func createFolderRequest(parentID: String, name: String) -> RemoteRequest {
