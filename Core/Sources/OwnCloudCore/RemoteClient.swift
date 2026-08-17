@@ -28,7 +28,17 @@ public struct RemoteClient {
     /// ``RemoteError`` classified from the status on an HTTP failure.
     @discardableResult
     public func send(_ request: RemoteRequest, authorization: String?) async throws -> Data {
-        let urlRequest = try URLRequestFactory.urlRequest(from: request, authorization: authorization)
+        try await send(request, body: nil, authorization: authorization)
+    }
+
+    /// As ``send(_:authorization:)`` but with an explicit request body — the bytes
+    /// of a content upload (WebDAV `PUT`, Graph `PUT /content`), which the pure
+    /// ``RemoteRequest`` deliberately does not carry (it only records `hasBody`).
+    /// A `nil` body falls back to the request's own `jsonBody`.
+    @discardableResult
+    public func send(_ request: RemoteRequest, body: Data?, authorization: String?) async throws -> Data {
+        var urlRequest = try URLRequestFactory.urlRequest(from: request, authorization: authorization)
+        if let body { urlRequest.httpBody = body }
         let (data, response) = try await perform(urlRequest)
         if let error = RemoteError(statusCode: response.statusCode) {
             throw error
