@@ -57,11 +57,19 @@ final class DevHarnessModel: ObservableObject {
 
     /// Register the domain the extension serves.
     func addDomain() {
+        let identifier = DevHarnessConfig.account.domainIdentifier
         let domain = NSFileProviderDomain(account: DevHarnessConfig.account)
+        NSLog("[DevHarness] add(domain:) identifier=%@ rawIdentifier=%@ displayName=%@",
+              identifier, domain.identifier.rawValue, domain.displayName)
         NSFileProviderManager.add(domain) { [weak self] error in
             Task { @MainActor in
-                self?.status = error.map { "Add domain FAILED: \($0.localizedDescription)" }
-                    ?? "Domain added: \(domain.displayName). Look for it in Finder's sidebar."
+                if let error = error as NSError? {
+                    NSLog("[DevHarness] add FAILED domain=%@ code=%ld userInfo=%@",
+                          error.domain, error.code, error.userInfo)
+                    self?.status = "Add domain FAILED: \(error.domain) code=\(error.code) — \(error.localizedDescription)\nid=\(identifier)"
+                } else {
+                    self?.status = "Domain added: \(domain.displayName). Look for it in Finder's sidebar."
+                }
             }
         }
     }
