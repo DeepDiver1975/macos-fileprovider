@@ -1,25 +1,42 @@
 import FileProvider
 import OwnCloudCore
+import FileProviderSupport
 
 // Principal class for the File Provider (non-UI) extension, referenced from
 // SupportingFiles/Info.plist as $(PRODUCT_MODULE_NAME).FileProviderExtension.
 //
-// This is scaffold for Task 1.1: the replicated-extension contract
-// (fetchContents, createItem, modifyItem, deleteItem, enumerator vending) is
-// implemented test-first in Phases 3–4. It intentionally does the minimum to
-// satisfy NSFileProviderReplicatedExtension so the target compiles once the
-// Xcode project is generated on a Mac.
+// It reconstructs the account from the domain identifier (progress.md Task 5.1)
+// and builds a BackendConnection (Phase 3–5) that the enumerator and content
+// handlers drive. The pagination, request shaping, parsing and error
+// classification all live in the Linux-buildable core and are unit-tested there;
+// this class is the thin FileProvider-framework wiring.
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     let domain: NSFileProviderDomain
+    private let account: AccountDescriptor?
+    private let connection: BackendConnection?
+    private let downloader: ContentDownloader
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
+        let client = RemoteClient.urlSession()
+        // The domain identifier round-trips the account (backend, server, user).
+        let account = AccountDescriptor(domainIdentifier: domain.identifier.rawValue)
+        self.account = account
+        // Credentials come from the shared Keychain access group (Task 1.3); the
+        // authorization header and the resolved oCIS drive id are looked up per
+        // domain. Until the Keychain-backed CredentialStore is wired (Mac runtime),
+        // there is no authorization and calls surface .notAuthenticated.
+        let authorization = FileProviderExtension.authorization(for: account)
+        self.connection = account.map {
+            BackendConnection(account: $0, client: client, authorization: authorization, driveID: nil)
+        }
+        self.downloader = ContentDownloader(client: client)
         super.init()
     }
 
     func invalidate() {
-        // Release per-domain resources here (Phase 5).
+        // No long-lived resources held per domain.
     }
 
     func item(
@@ -27,6 +44,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
+        // Single-item lookup is added with the metadata cache; enumeration is the
+        // Task 6.0 make-or-break path and is wired below.
         completionHandler(nil, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
         return Progress()
     }
@@ -37,8 +56,32 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
-        // Phase 4, Task 4.1/4.2.
-        completionHandler(nil, nil, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
+        guard let connection else {
+            completionHandler(nil, nil, NSFileProviderError(.notAuthenticated))
+            return Progress()
+        }
+        let fetchRequest: RemoteRequest
+        switch connection.account.backend {
+        case .classic:
+            // The Classic item identifier is the server-relative path.
+            fetchRequest = connection.fetchContentsRequest(path: itemIdentifier.rawValue)
+        case .ocis:
+            fetchRequest = connection.fetchContentsRequest(itemID: itemIdentifier.rawValue)
+        }
+        let downloader = self.downloader
+        let auth = FileProviderExtension.authorization(for: account)
+        Task {
+            do {
+                let url = try await downloader.download(fetchRequest, authorization: auth)
+                // Hand the temp URL back; the system takes ownership. The item is
+                // supplied on the next enumeration/lookup pass.
+                completionHandler(url, nil, nil)
+            } catch let error as RemoteError {
+                completionHandler(nil, nil, error.asFileProviderError)
+            } catch {
+                completionHandler(nil, nil, error)
+            }
+        }
         return Progress()
     }
 
@@ -50,7 +93,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
     ) -> Progress {
-        // Phase 4, Task 4.4.
+        // Phase 4, Task 4.4 — uses ContentUploader; wired with the metadata cache
+        // that maps the created item back to a server address.
         completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
         return Progress()
     }
@@ -85,7 +129,23 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         for containerItemIdentifier: NSFileProviderItemIdentifier,
         request: NSFileProviderRequest
     ) throws -> NSFileProviderEnumerator {
-        // Phase 3, Task 3.1–3.3.
-        throw NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError)
+        guard let connection else {
+            throw NSFileProviderError(.notAuthenticated)
+        }
+        let container: ItemIdentifier = containerItemIdentifier == .rootContainer
+            ? .rootContainer
+            : ItemIdentifier(rawValue: containerItemIdentifier.rawValue)
+        return ItemEnumerator(source: connection.enumerationSource(for: container))
+    }
+
+    // MARK: Credentials
+
+    /// The `Authorization` header for this domain's account, from the shared
+    /// Keychain access group. Returns `nil` until the Keychain-backed
+    /// `CredentialStore` is wired (Task 1.3 / 2.5, Mac runtime), so handlers fail
+    /// cleanly with `.notAuthenticated` rather than sending unauthenticated
+    /// requests.
+    private static func authorization(for account: AccountDescriptor?) -> String? {
+        nil
     }
 }
