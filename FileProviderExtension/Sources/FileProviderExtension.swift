@@ -95,27 +95,48 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
     ) -> Progress {
-        // Phase 4, Task 4.4. oCIS reconciles the created item from the driveItem
-        // the server returns (its assigned id + eTag). Classic returns no metadata
-        // body on a PUT/MKCOL (it needs a follow-up PROPFIND), so that path stays
-        // pending the Task 6.0 live spike.
+        // Phase 4, Task 4.4. The two backends reconcile the created item
+        // differently: oCIS returns the driveItem (its assigned id + eTag) in the
+        // response body, while Classic's PUT/MKCOL returns no body and needs a
+        // Depth:0 PROPFIND read-back to learn the server-assigned id and etag.
         guard let connection else {
             completionHandler(nil, [], false, NSFileProviderError(.notAuthenticated))
             return Progress()
         }
-        guard connection.account.backend == .ocis else {
-            completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
-            return Progress()
-        }
 
-        let parent: ItemIdentifier = itemTemplate.parentItemIdentifier == .rootContainer
-            ? .rootContainer
-            : ItemIdentifier(rawValue: itemTemplate.parentItemIdentifier.rawValue)
         let isDirectory = itemTemplate.contentType == .folder
-        let createRequest = connection.createItemRequest(
-            parentID: parent, name: itemTemplate.filename, isDirectory: isDirectory
-        )
+        let parentIdentifier = itemTemplate.parentItemIdentifier
+        let parent: ItemIdentifier = parentIdentifier == .rootContainer
+            ? .rootContainer
+            : ItemIdentifier(rawValue: parentIdentifier.rawValue)
 
+        switch connection.account.backend {
+        case .ocis:
+            createItemOCIS(
+                connection: connection, parent: parent, name: itemTemplate.filename,
+                isDirectory: isDirectory, contents: url, completionHandler: completionHandler
+            )
+        case .classic:
+            createItemClassic(
+                connection: connection, parentIdentifier: parentIdentifier, parent: parent,
+                name: itemTemplate.filename, isDirectory: isDirectory, contents: url,
+                completionHandler: completionHandler
+            )
+        }
+        return Progress()
+    }
+
+    /// oCIS create: the response body is the created driveItem, so it reconciles
+    /// directly with no read-back.
+    private func createItemOCIS(
+        connection: BackendConnection,
+        parent: ItemIdentifier,
+        name: String,
+        isDirectory: Bool,
+        contents url: URL?,
+        completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
+    ) {
+        let createRequest = connection.createItemRequest(parentID: parent, name: name, isDirectory: isDirectory)
         let client = self.client
         let uploader = ContentUploader(client: client)
         let auth = FileProviderExtension.authorization(for: account)
@@ -141,7 +162,59 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 completionHandler(nil, [], false, error)
             }
         }
-        return Progress()
+    }
+
+    /// Classic create: PUT/MKCOL return no metadata body, so after the write we
+    /// PROPFIND (Depth:0) the new item's path to learn its server-assigned id and
+    /// etag, then reconcile. The Classic item identifier is the server-relative
+    /// path, so the new item's path is the parent path joined with the filename.
+    private func createItemClassic(
+        connection: BackendConnection,
+        parentIdentifier: NSFileProviderItemIdentifier,
+        parent: ItemIdentifier,
+        name: String,
+        isDirectory: Bool,
+        contents url: URL?,
+        completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
+    ) {
+        // The root container is served at "/", so a child of root is "/name";
+        // otherwise it is "<parent path>/name".
+        let parentPath = parentIdentifier == .rootContainer ? "" : parentIdentifier.rawValue
+        let newPath = parentPath + "/" + name
+        let writeRequest = isDirectory
+            ? connection.createDirectoryRequest(path: newPath)
+            : connection.createFileRequest(path: newPath)
+        let readBackRequest = connection.readBackRequest(path: newPath)
+
+        let client = self.client
+        let uploader = ContentUploader(client: client)
+        let auth = FileProviderExtension.authorization(for: account)
+        Task {
+            do {
+                // Write first (create the collection, or stream the file bytes),
+                // discarding the empty response.
+                if isDirectory {
+                    _ = try await client.send(writeRequest, authorization: auth)
+                } else if let url {
+                    _ = try await uploader.uploadReturningBody(writeRequest, fromFile: url, authorization: auth)
+                } else {
+                    _ = try await client.send(writeRequest, body: Data(), authorization: auth)
+                }
+                // Then read the new item back for its server-assigned metadata.
+                let body = try await client.send(readBackRequest, authorization: auth)
+                guard let description = try connection.readBackItem(fromPropfind: body, parentIdentifier: parent) else {
+                    // The write succeeded but the read-back found nothing — treat as
+                    // a server-side error rather than reporting a bogus item.
+                    completionHandler(nil, [], false, NSFileProviderError(.serverUnreachable))
+                    return
+                }
+                completionHandler(FileProviderItem(itemDescription: description), [], false, nil)
+            } catch let error as RemoteError {
+                completionHandler(nil, [], false, error.asFileProviderError)
+            } catch {
+                completionHandler(nil, [], false, error)
+            }
+        }
     }
 
     func modifyItem(

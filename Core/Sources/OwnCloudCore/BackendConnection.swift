@@ -113,6 +113,27 @@ public struct BackendConnection {
         webDAVBuilder.move(fromPath: fromPath, toPath: toPath)
     }
 
+    /// WebDAV metadata read-back (Classic): a `Depth:0` PROPFIND at the item's
+    /// path. `createItem`/`modifyItem` need this because a `PUT`/`MKCOL` returns
+    /// no metadata body, so the server-assigned id and etag are only knowable by
+    /// reading the item back.
+    public func readBackRequest(path: String) -> RemoteRequest {
+        webDAVBuilder.properties(path: path)
+    }
+
+    /// Parse the single item from a Classic read-back PROPFIND body into a
+    /// description under `parentIdentifier` (WebDAV hrefs don't carry a parent,
+    /// so the caller supplies it). Returns `nil` if the multi-status has no
+    /// entry — e.g. the item vanished between the write and the read-back.
+    public func readBackItem(
+        fromPropfind body: Data,
+        parentIdentifier: ItemIdentifier
+    ) throws -> FileProviderItemDescription? {
+        let items = try WebDAVMultiStatusParser().parse(body)
+        guard let item = items.first else { return nil }
+        return FileProviderItemDescription(webDAVItem: item, parentIdentifier: parentIdentifier)
+    }
+
     // MARK: Push operations — oCIS (ID-addressed)
 
     /// Graph content modify (oCIS): a PUT on `/items/{id}/content` with an
