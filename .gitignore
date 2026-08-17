@@ -75,6 +75,5 @@ fastlane/test_output
 ## Local tooling artifacts
 # Planning/spec docs from local skills - must never land in project history
 docs/superpowers/
-# Machine-local Claude Code state
-.claude/settings.local.json
-.claude/.cc-writes/
+# Machine-local Claude Code harness state - never commit any of it
+.claude/
