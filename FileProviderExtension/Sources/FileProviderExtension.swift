@@ -16,10 +16,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     private let account: AccountDescriptor?
     private let connection: BackendConnection?
     private let downloader: ContentDownloader
+    private let client: RemoteClient
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
         let client = RemoteClient.urlSession()
+        self.client = client
         // The domain identifier round-trips the account (backend, server, user).
         let account = AccountDescriptor(domainIdentifier: domain.identifier.rawValue)
         self.account = account
@@ -120,8 +122,31 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (Error?) -> Void
     ) -> Progress {
-        // Phase 4, Task 4.4.
-        completionHandler(NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
+        // Phase 4, Task 4.4. Delete needs no metadata read-back: issue the DELETE
+        // at the item's backend address and report success or a mapped error.
+        guard let connection else {
+            completionHandler(NSFileProviderError(.notAuthenticated))
+            return Progress()
+        }
+        let deleteRequest: RemoteRequest
+        switch connection.account.backend {
+        case .classic:
+            deleteRequest = connection.deleteRequest(path: identifier.rawValue)
+        case .ocis:
+            deleteRequest = connection.deleteRequest(itemID: identifier.rawValue)
+        }
+        let client = self.client
+        let auth = FileProviderExtension.authorization(for: account)
+        Task {
+            do {
+                try await client.send(deleteRequest, authorization: auth)
+                completionHandler(nil)
+            } catch let error as RemoteError {
+                completionHandler(error.asFileProviderError)
+            } catch {
+                completionHandler(error)
+            }
+        }
         return Progress()
     }
 

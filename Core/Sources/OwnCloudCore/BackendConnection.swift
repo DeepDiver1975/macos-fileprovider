@@ -83,4 +83,52 @@ public struct BackendConnection {
     public func fetchContentsRequest(itemID: String) -> RemoteRequest {
         graphBuilder.fetchContents(driveID: driveID ?? "", itemID: itemID)
     }
+
+    // MARK: Push operations — Classic (path-addressed)
+
+    /// WebDAV file create (Classic): a PUT at the item's server-relative path.
+    public func createFileRequest(path: String) -> RemoteRequest {
+        webDAVBuilder.createFile(path: path)
+    }
+
+    /// WebDAV directory create (Classic): MKCOL at the collection's path.
+    public func createDirectoryRequest(path: String) -> RemoteRequest {
+        webDAVBuilder.createDirectory(path: path)
+    }
+
+    /// WebDAV content modify (Classic): a PUT with an optional `If-Match` etag for
+    /// optimistic concurrency.
+    public func modifyContentsRequest(path: String, ifMatchETag etag: String?) -> RemoteRequest {
+        webDAVBuilder.modifyContents(path: path, ifMatchETag: etag)
+    }
+
+    /// WebDAV delete (Classic): DELETE at the item's path.
+    public func deleteRequest(path: String) -> RemoteRequest {
+        webDAVBuilder.delete(path: path)
+    }
+
+    /// WebDAV move/rename (Classic): MOVE with a `Destination` header and
+    /// `Overwrite: F` so it never clobbers an existing item.
+    public func moveRequest(fromPath: String, toPath: String) -> RemoteRequest {
+        webDAVBuilder.move(fromPath: fromPath, toPath: toPath)
+    }
+
+    // MARK: Push operations — oCIS (ID-addressed)
+
+    /// Graph content modify (oCIS): a PUT on `/items/{id}/content` with an
+    /// optional `If-Match` etag.
+    public func modifyContentsRequest(itemID: String, ifMatchETag etag: String?) -> RemoteRequest {
+        graphBuilder.modifyContents(driveID: driveID ?? "", itemID: itemID, ifMatchETag: etag)
+    }
+
+    /// Graph delete (oCIS): DELETE on `/items/{id}`.
+    public func deleteRequest(itemID: String) -> RemoteRequest {
+        graphBuilder.delete(driveID: driveID ?? "", itemID: itemID)
+    }
+
+    /// Graph folder create (oCIS): POST a folder driveItem to the parent's
+    /// `/children` collection.
+    public func createFolderRequest(parentID: String, name: String) -> RemoteRequest {
+        graphBuilder.createFolder(driveID: driveID ?? "", parentID: parentID, name: name)
+    }
 }

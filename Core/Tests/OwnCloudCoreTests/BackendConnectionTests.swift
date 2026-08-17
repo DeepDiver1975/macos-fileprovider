@@ -86,4 +86,81 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertEqual(request.method, .get)
         XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9/content")
     }
+
+    // MARK: Push request shaping — Classic (path-addressed)
+
+    private func classicConnection() -> BackendConnection {
+        let account = AccountDescriptor(backend: .classic, serverURL: URL(string: "https://cloud.test")!, username: "admin")
+        return BackendConnection(account: account, client: client(status: 200, body: Data()), authorization: nil)
+    }
+
+    func testClassicCreateFileTargetsThePathWithPut() {
+        let request = classicConnection().createFileRequest(path: "/folder/new.txt")
+
+        XCTAssertEqual(request.method, .put)
+        XCTAssertTrue(request.hasBody)
+        XCTAssertEqual(request.url.absoluteString, "https://cloud.test/remote.php/dav/files/admin/folder/new.txt")
+    }
+
+    func testClassicCreateDirectoryUsesMkcol() {
+        let request = classicConnection().createDirectoryRequest(path: "/folder/sub")
+
+        XCTAssertEqual(request.method, .mkcol)
+        XCTAssertEqual(request.url.absoluteString, "https://cloud.test/remote.php/dav/files/admin/folder/sub")
+    }
+
+    func testClassicModifyContentsSendsIfMatchETag() {
+        let request = classicConnection().modifyContentsRequest(path: "/a.txt", ifMatchETag: "\"e1\"")
+
+        XCTAssertEqual(request.method, .put)
+        XCTAssertTrue(request.hasBody)
+        XCTAssertEqual(request.headers["If-Match"], "\"e1\"")
+        XCTAssertEqual(request.url.absoluteString, "https://cloud.test/remote.php/dav/files/admin/a.txt")
+    }
+
+    func testClassicDeleteTargetsThePath() {
+        let request = classicConnection().deleteRequest(path: "/folder/gone.txt")
+
+        XCTAssertEqual(request.method, .delete)
+        XCTAssertEqual(request.url.absoluteString, "https://cloud.test/remote.php/dav/files/admin/folder/gone.txt")
+    }
+
+    func testClassicMoveSetsDestinationAndNoOverwrite() {
+        let request = classicConnection().moveRequest(fromPath: "/a.txt", toPath: "/b/c.txt")
+
+        XCTAssertEqual(request.method, .move)
+        XCTAssertEqual(request.headers["Destination"], "https://cloud.test/remote.php/dav/files/admin/b/c.txt")
+        XCTAssertEqual(request.headers["Overwrite"], "F")
+    }
+
+    // MARK: Push request shaping — oCIS (ID-addressed)
+
+    private func ocisConnection() -> BackendConnection {
+        let account = AccountDescriptor(backend: .ocis, serverURL: URL(string: "https://ocis.test")!, username: "einstein")
+        return BackendConnection(account: account, client: client(status: 200, body: Data()), authorization: nil, driveID: "drive-1")
+    }
+
+    func testOCISModifyContentsTargetsItemContentWithETag() {
+        let request = ocisConnection().modifyContentsRequest(itemID: "item-9", ifMatchETag: "\"e2\"")
+
+        XCTAssertEqual(request.method, .put)
+        XCTAssertTrue(request.hasBody)
+        XCTAssertEqual(request.headers["If-Match"], "\"e2\"")
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9/content")
+    }
+
+    func testOCISDeleteTargetsTheItem() {
+        let request = ocisConnection().deleteRequest(itemID: "item-9")
+
+        XCTAssertEqual(request.method, .delete)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
+    }
+
+    func testOCISCreateFolderPostsToParentChildren() {
+        let request = ocisConnection().createFolderRequest(parentID: "parent-1", name: "New Folder")
+
+        XCTAssertEqual(request.method, .post)
+        XCTAssertTrue(request.hasBody)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1/children")
+    }
 }
