@@ -126,6 +126,15 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertTrue(req.hasBody)
     }
 
+    func testGraphListDrivesIsGetOnMeDrives() {
+        // Drive-id resolution at sign-in: list the user's drives to find the
+        // personal one the domain maps to.
+        let req = graph.listDrives()
+        XCTAssertEqual(req.method, .get)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/me/drives"))
+        XCTAssertFalse(req.hasBody)
+    }
+
     func testGraphMoveIsPatchWithNameAndParentReference() throws {
         // Graph rename/move is a PATCH on the item carrying the new name and/or a
         // new parentReference.id — the ID-addressed counterpart of WebDAV MOVE.

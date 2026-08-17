@@ -33,6 +33,13 @@ public struct GraphRequestBuilder {
         return name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name
     }
 
+    /// List the signed-in user's drives (`GET /me/drives`) — used at sign-in to
+    /// resolve which drive the domain maps to (the personal drive).
+    public func listDrives() -> RemoteRequest {
+        let url = URL(string: baseURL.absoluteString + "/graph/v1.0/me/drives") ?? baseURL
+        return RemoteRequest(method: .get, url: url)
+    }
+
     public func fetchContents(driveID: String, itemID: String) -> RemoteRequest {
         RemoteRequest(method: .get, url: itemURL(driveID: driveID, itemID: itemID, suffix: "/content"))
     }
