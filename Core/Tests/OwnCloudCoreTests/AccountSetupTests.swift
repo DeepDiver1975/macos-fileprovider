@@ -67,6 +67,34 @@ final class AccountSetupTests: XCTestCase {
         XCTAssertEqual(account.displayName, "admin@cloud.example.org")
     }
 
+    func testAccountDescriptorRoundTripsThroughItsDomainIdentifier() {
+        // The extension is handed only an NSFileProviderDomain (carrying the
+        // identifier); it must reconstruct the account to build a backend source.
+        let account = AccountDescriptor(
+            backend: .ocis,
+            serverURL: URL(string: "https://ocis.test")!,
+            username: "einstein"
+        )
+        let restored = AccountDescriptor(domainIdentifier: account.domainIdentifier)
+        XCTAssertEqual(restored, account)
+    }
+
+    func testDomainIdentifierRoundTripSurvivesPipeInUsername() {
+        // Only the first two separators are structural — a '|' inside the username
+        // must not corrupt the round trip.
+        let account = AccountDescriptor(
+            backend: .classic,
+            serverURL: URL(string: "https://cloud.example.org/owncloud")!,
+            username: "od|d"
+        )
+        XCTAssertEqual(AccountDescriptor(domainIdentifier: account.domainIdentifier), account)
+    }
+
+    func testMalformedDomainIdentifierReturnsNil() {
+        XCTAssertNil(AccountDescriptor(domainIdentifier: "not-a-valid-identifier"))
+        XCTAssertNil(AccountDescriptor(domainIdentifier: "bogusbackend|https://x.test|u"))
+    }
+
     // MARK: - Removal mode mapping
 
     func testRemovalModeDefaultsToPreservingDownloads() {

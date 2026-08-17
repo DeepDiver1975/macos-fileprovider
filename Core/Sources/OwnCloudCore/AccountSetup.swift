@@ -60,6 +60,22 @@ public struct AccountDescriptor: Sendable, Equatable {
         self.username = username
     }
 
+    /// Reconstruct the account from a ``domainIdentifier`` — the inverse of the
+    /// computed property below. The extension receives only the domain (carrying
+    /// this identifier) and must rebuild the account to construct a backend source.
+    ///
+    /// Only the first two `|` are structural (backend, serverURL); the remainder is
+    /// the username verbatim, so a `|` inside the username survives. Returns `nil`
+    /// if the backend token or the server URL does not parse.
+    public init?(domainIdentifier: String) {
+        let parts = domainIdentifier.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              let backend = Backend(rawValue: String(parts[0])),
+              let serverURL = URL(string: String(parts[1]))
+        else { return nil }
+        self.init(backend: backend, serverURL: serverURL, username: String(parts[2]))
+    }
+
     /// Stable identifier for the domain — same account, same id across launches,
     /// so the system reuses the existing domain rather than duplicating it.
     public var domainIdentifier: String {
