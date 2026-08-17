@@ -1,0 +1,46 @@
+# oCIS fixture (progress.md Task 6.2, AC-1 / AC-7).
+#
+# Pinned to owncloud/ocis:8.2.0. Used for the backend-contract tier on
+# ubuntu-latest. On the macOS end-to-end tier oCIS is instead started from its
+# darwin-arm64 release binary at the SAME version (see start-ocis-macos.sh) —
+# hosted macOS runners have no container runtime (AC-2).
+#
+# IDM_CREATE_DEMO_USERS is off; fixture users are created through the Graph API
+# (BackendAdmin, Task 6.3), never by touching container storage (AC-1).
+services:
+  ocis:
+    image: owncloud/ocis:8.2.0
+    container_name: ocis
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "ocis init || true && ocis server"]
+    ports:
+      - "9200:9200"
+    environment:
+      OCIS_URL: https://localhost:9200
+      OCIS_INSECURE: "true"
+      OCIS_LOG_LEVEL: error
+      PROXY_TLS: "true"
+      IDM_ADMIN_PASSWORD: admin
+      IDM_CREATE_DEMO_USERS: "false"
+      # Test-fixture only: let the backend-contract tier authenticate the Graph
+      # and WebDAV APIs with Basic auth, so the same credential path exercises
+      # both backends. Production oCIS uses OIDC; the SessionManager bearer path
+      # is covered by unit tests (Task 2.5). Never enable this outside fixtures.
+      PROXY_ENABLE_BASIC_AUTH: "true"
+    healthcheck:
+      # `ocis health` is not a subcommand in 8.2.0 (exits "No help topic for
+      # 'health'"), so probe the proxy directly: a Basic-authenticated Graph call
+      # proves the whole stack the contract tier drives — proxy + IDP + Graph — is
+      # actually serving, not just that a port is open.
+      test: ["CMD", "curl", "-skf", "-u", "admin:admin", "https://127.0.0.1:9200/graph/v1.0/me/drives"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    volumes:
+      - ocis-config:/etc/ocis
+      - ocis-data:/var/lib/ocis
+
+volumes:
+  ocis-config:
+  ocis-data:

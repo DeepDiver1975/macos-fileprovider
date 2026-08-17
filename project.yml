@@ -1,0 +1,96 @@
+# XcodeGen manifest for the macOS ownCloud File Provider project (progress.md
+# Task 1.1). SPM cannot emit an `.appex`, so the two extensions are Xcode-project
+# targets here; all three targets consume the local SPM package `OwnCloudCore`.
+#
+# The committed Info.plists and .entitlements are used verbatim (via
+# INFOPLIST_FILE / CODE_SIGN_ENTITLEMENTS) rather than regenerated, so the
+# reviewed Phase 1 artifacts remain the source of truth. Regenerate the project
+# with `xcodegen generate`; the `.xcodeproj` itself is not committed.
+name: OwnCloudFileProvider
+options:
+  bundleIdPrefix: com.owncloud.macos.fileprovider
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    MARKETING_VERSION: "0.0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: "4AP2STM4H5"
+    CODE_SIGN_STYLE: Automatic
+    GENERATE_INFOPLIST_FILE: NO
+
+packages:
+  OwnCloudCore:
+    path: Core
+
+targets:
+  App:
+    type: application
+    platform: macOS
+    sources:
+      - App/Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.owncloud.macos.fileprovider
+        PRODUCT_NAME: "ownCloud File Provider"
+        INFOPLIST_FILE: App/SupportingFiles/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/SupportingFiles/App.entitlements
+    dependencies:
+      - package: OwnCloudCore
+      # The Mac-only adapter layer (NSFileProviderDomain(account:), removal-mode
+      # mapping) the app uses to add/remove the domain via NSFileProviderManager.
+      - package: OwnCloudCore
+        product: FileProviderSupport
+      - target: FileProviderExtension
+      - target: FileProviderUIExtension
+
+  FileProviderExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - FileProviderExtension/Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.owncloud.macos.fileprovider.FileProvider
+        PRODUCT_NAME: FileProviderExtension
+        INFOPLIST_FILE: FileProviderExtension/SupportingFiles/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FileProviderExtension/SupportingFiles/FileProviderExtension.entitlements
+    dependencies:
+      - package: OwnCloudCore
+      # The FileProviderItem / ItemEnumerator / RemoteError adapters the
+      # replicated extension vends and returns (Phases 3–4).
+      - package: OwnCloudCore
+        product: FileProviderSupport
+
+  FileProviderUIExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - FileProviderUIExtension/Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.owncloud.macos.fileprovider.FileProviderUI
+        PRODUCT_NAME: FileProviderUIExtension
+        INFOPLIST_FILE: FileProviderUIExtension/SupportingFiles/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FileProviderUIExtension/SupportingFiles/FileProviderUIExtension.entitlements
+    dependencies:
+      - package: OwnCloudCore
+
+schemes:
+  App:
+    build:
+      targets:
+        App: all
+    run:
+      config: Debug
+    # `xcodebuild test -scheme App` runs the OwnCloudCore package suite through
+    # the project (progress.md Task 1.4, the xcodebuild-test half). Extension
+    # XCTest targets are added here as they gain testable logic.
+    test:
+      targets:
+        - package: OwnCloudCore/OwnCloudCoreTests
+        - package: OwnCloudCore/FileProviderSupportTests

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Containing app entitlements (progress.md Task 1.3).
+
+  The app hosts the sign-in flow and registers the File Provider domain via
+  NSFileProviderManager (Task 5.1). It shares the app group and keychain group
+  with both extensions so credentials captured at sign-in are visible to the
+  provider. network.client lets the app validate the server and run OIDC.
+
+  NSFileProviderDomainUsageDescription is deliberately absent: that key is for
+  apps that CONSUME another provider's files, which this app does not
+  (progress.md Task 1.2).
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.owncloud.macos.fileprovider</string>
+    </array>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.owncloud.macos.fileprovider.shared</string>
+    </array>
+</dict>
+</plist>
