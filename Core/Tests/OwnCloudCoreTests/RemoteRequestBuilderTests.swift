@@ -93,6 +93,14 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f"))
     }
 
+    func testGraphMetadataIsGetOnItemWithoutContentSuffix() {
+        // Single-item lookup (`item(for:)`) fetches the driveItem's metadata — a
+        // GET on the item itself, not on `/content`.
+        let req = graph.metadata(driveID: driveID, itemID: "x!f")
+        XCTAssertEqual(req.method, .get)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f"))
+    }
+
     func testGraphCreateFolderPostsToParentChildren() {
         let req = graph.createFolder(driveID: driveID, parentID: "x!root", name: "New Folder")
         XCTAssertEqual(req.method, .post)
