@@ -157,4 +157,44 @@ final class GraphModelsTests: XCTestCase {
         let garbage = Data("{ not json ".utf8)
         XCTAssertThrowsError(try decoder.decodeItemCollection(garbage))
     }
+
+    // MARK: Single driveItem (create / modify responses)
+
+    func testDecodesSingleItem() throws {
+        // A create/upload/modify response is a single driveItem object, not a
+        // `value` collection — the extension reconciles the created/modified item
+        // from it (server-assigned id, new eTag).
+        let json = """
+        {
+          "id": "srv-42", "name": "new.txt", "size": 5, "eTag": "\\"v2\\"",
+          "lastModifiedDateTime": "2026-08-17T10:00:00Z",
+          "file": { "mimeType": "text/plain" },
+          "parentReference": { "driveId": "drive-1", "id": "root" }
+        }
+        """
+        let item = try decoder.decodeItem(Data(json.utf8))
+
+        XCTAssertEqual(item.id, "srv-42")
+        XCTAssertEqual(item.name, "new.txt")
+        XCTAssertEqual(item.size, 5)
+        XCTAssertEqual(item.eTag, "\"v2\"")
+        XCTAssertFalse(item.isFolder)
+        XCTAssertEqual(item.mimeType, "text/plain")
+        XCTAssertEqual(item.parentID, "root")
+    }
+
+    func testDecodesSingleFolderItem() throws {
+        let json = """
+        { "id": "f-1", "name": "New Folder", "folder": { "childCount": 0 },
+          "parentReference": { "driveId": "drive-1", "id": "root" } }
+        """
+        let item = try decoder.decodeItem(Data(json.utf8))
+
+        XCTAssertEqual(item.id, "f-1")
+        XCTAssertTrue(item.isFolder)
+    }
+
+    func testDecodeSingleItemThrowsOnMalformedJSON() {
+        XCTAssertThrowsError(try decoder.decodeItem(Data("{ not json ".utf8)))
+    }
 }

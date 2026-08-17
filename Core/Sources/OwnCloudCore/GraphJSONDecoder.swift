@@ -36,25 +36,35 @@ public struct GraphJSONDecoder {
 
     public func decodeItemCollection(_ data: Data) throws -> GraphItemCollection {
         let wire = try JSONDecoder().decode(WireCollection<WireItem>.self, from: data)
-        let items = wire.value.map { i in
-            GraphItem(
-                id: i.id,
-                name: i.name ?? "",
-                size: i.size,
-                eTag: i.eTag,
-                lastModified: Self.parseDate(i.lastModifiedDateTime),
-                isFolder: i.folder != nil,
-                childCount: i.folder?.childCount,
-                mimeType: i.file?.mimeType,
-                parentDriveID: i.parentReference?.driveId,
-                parentID: i.parentReference?.id,
-                isDeleted: i.deleted != nil
-            )
-        }
         return GraphItemCollection(
-            items: items,
+            items: wire.value.map(Self.item(from:)),
             deltaToken: Self.token(fromLink: wire.deltaLink),
             nextToken: Self.token(fromLink: wire.nextLink)
+        )
+    }
+
+    /// Decode a single Graph `driveItem` — the shape a create / upload / modify
+    /// response returns (one object, not a `value` collection). The extension
+    /// reconciles the created or modified item from this (server-assigned id, new
+    /// eTag) before handing it back to the system.
+    public func decodeItem(_ data: Data) throws -> GraphItem {
+        let wire = try JSONDecoder().decode(WireItem.self, from: data)
+        return Self.item(from: wire)
+    }
+
+    private static func item(from i: WireItem) -> GraphItem {
+        GraphItem(
+            id: i.id,
+            name: i.name ?? "",
+            size: i.size,
+            eTag: i.eTag,
+            lastModified: parseDate(i.lastModifiedDateTime),
+            isFolder: i.folder != nil,
+            childCount: i.folder?.childCount,
+            mimeType: i.file?.mimeType,
+            parentDriveID: i.parentReference?.driveId,
+            parentID: i.parentReference?.id,
+            isDeleted: i.deleted != nil
         )
     }
 
