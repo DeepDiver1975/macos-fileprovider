@@ -241,18 +241,23 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         // Phase 4, Task 4.4. Two change kinds are wired: a content edit (PUT the
         // new bytes with an `If-Match` on the base version's etag, then reconcile)
         // and a rename/move (`.filename`/`.parentItemIdentifier` — WebDAV MOVE /
-        // Graph PATCH). A single call carrying both is handled as content-first;
-        // combined atomic rename+content is a follow-up.
+        // Graph PATCH). A single call carrying both is applied content-first then
+        // rename (neither backend offers a truly atomic combined op): the content
+        // PUT targets the item's current address, then the move relocates it, and
+        // the move's reconciled item — the final server state — is returned. This
+        // ordering keeps the Classic path-address valid, since the content write
+        // happens before the path changes.
         let etag = String(data: version.contentVersion, encoding: .utf8).flatMap { $0.isEmpty ? nil : $0 }
         let identifier = item.itemIdentifier
         let parent: ItemIdentifier = item.parentItemIdentifier == .rootContainer
             ? .rootContainer
             : ItemIdentifier(rawValue: item.parentItemIdentifier.rawValue)
 
-        // A pure metadata change we don't yet handle needs no connection.
-        guard changedFields.contains(.contents)
-            || changedFields.contains(.filename)
-            || changedFields.contains(.parentItemIdentifier) else {
+        let contentsChanged = changedFields.contains(.contents)
+        let renamed = changedFields.contains(.filename) || changedFields.contains(.parentItemIdentifier)
+
+        // A change we don't handle (e.g. a pure metadata edit) needs no connection.
+        guard contentsChanged || renamed else {
             completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
             return Progress()
         }
@@ -260,8 +265,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         Task {
             do {
                 let connection = try await makeConnection()
-                let result: FileProviderItem
-                if changedFields.contains(.contents) {
+                var result: FileProviderItem?
+                if contentsChanged {
                     // The base version's content token is the etag the system last
                     // saw; send it as `If-Match` so a server-side change since then
                     // fails the write rather than silently clobbering it.
@@ -277,12 +282,15 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                             parent: parent, etag: etag, contents: newContents
                         )
                     }
-                } else {
+                }
+                if renamed {
                     result = try await moveItem(
                         connection: connection, item: item,
                         changedFields: changedFields, parent: parent
                     )
                 }
+                // Both flags were false is handled by the guard above, so `result`
+                // is always set here.
                 completionHandler(result, [], false, nil)
             } catch let error as RemoteError {
                 completionHandler(nil, [], false, error.asFileProviderError)
