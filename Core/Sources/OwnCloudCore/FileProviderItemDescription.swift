@@ -86,10 +86,18 @@ public extension FileProviderItemDescription {
     /// supplied by the enumerator (WebDAV hrefs don't carry a parent id; the
     /// enumerator knows the container it is listing).
     init(webDAVItem item: WebDAVItem, parentIdentifier: ItemIdentifier) {
-        // oc:id is the stable identifier; fall back to the href when absent.
-        let id = item.fileID ?? item.href
+        // ownCloud Classic is path-addressed: every consumer (subfolder
+        // enumeration, fetchContents, delete, move, read-back) treats the item
+        // identifier as a server-relative path. So the identifier is the item's
+        // path — the parent's path joined with this item's name — NOT its oc:id.
+        // (An oc:id identifier makes a subfolder PROPFIND target <files-root>/<oc:id>,
+        // a nonexistent URL that hangs; only the root worked, its path hardcoded
+        // to "/".) The name is percent-decoded and re-encoded per-segment by the
+        // request builder, so a decoded path here round-trips correctly.
+        let parentPath = parentIdentifier == .rootContainer ? "" : parentIdentifier.rawValue
+        let path = parentPath + "/" + item.name
         self.init(
-            identifier: ItemIdentifier(rawValue: id),
+            identifier: ItemIdentifier(rawValue: path),
             parentIdentifier: parentIdentifier,
             filename: item.name,
             isDirectory: item.isDirectory,
