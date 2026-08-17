@@ -52,6 +52,17 @@ public struct GraphRequestBuilder {
         return RemoteRequest(method: .get, url: url)
     }
 
+    /// PUT a new file's bytes under its parent, addressed by name via the
+    /// `items/{parent}:/{name}:/content` path syntax. The response is the created
+    /// driveItem the extension decodes to reconcile the server-assigned id.
+    public func uploadNewFile(driveID: String, parentID: String, name: String) -> RemoteRequest {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        let encodedName = name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name
+        let url = itemURL(driveID: driveID, itemID: parentID, suffix: ":/\(encodedName):/content")
+        return RemoteRequest(method: .put, url: url, hasBody: true)
+    }
+
     /// POST a folder driveItem to the parent's `/children` collection.
     public func createFolder(driveID: String, parentID: String, name: String) -> RemoteRequest {
         let body: [String: Any] = [

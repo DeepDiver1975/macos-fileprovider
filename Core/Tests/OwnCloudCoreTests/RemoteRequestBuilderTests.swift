@@ -101,6 +101,15 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertEqual(req.headers["Content-Type"], "application/json")
     }
 
+    func testGraphUploadNewFilePutsToParentPathContent() {
+        // A new file is uploaded by name under its parent via the `:/name:/content`
+        // path syntax; the response is the created driveItem the extension decodes.
+        let req = graph.uploadNewFile(driveID: driveID, parentID: "x!root", name: "new file.txt")
+        XCTAssertEqual(req.method, .put)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!root:/new%20file.txt:/content"))
+        XCTAssertTrue(req.hasBody)
+    }
+
     // MARK: - Enumeration requests (Phase 3)
 
     func testWebDAVEnumerateIsPropfindDepthOne() {

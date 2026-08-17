@@ -131,4 +131,10 @@ public struct BackendConnection {
     public func createFolderRequest(parentID: String, name: String) -> RemoteRequest {
         graphBuilder.createFolder(driveID: driveID ?? "", parentID: parentID, name: name)
     }
+
+    /// Graph new-file upload (oCIS): PUT the bytes under the parent addressed by
+    /// name, returning the created driveItem for reconciliation.
+    public func uploadNewFileRequest(parentID: String, name: String) -> RemoteRequest {
+        graphBuilder.uploadNewFile(driveID: driveID ?? "", parentID: parentID, name: name)
+    }
 }

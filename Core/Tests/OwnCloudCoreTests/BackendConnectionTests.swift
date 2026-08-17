@@ -163,4 +163,12 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertTrue(request.hasBody)
         XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1/children")
     }
+
+    func testOCISUploadNewFilePutsUnderParentByName() {
+        let request = ocisConnection().uploadNewFileRequest(parentID: "parent-1", name: "note.txt")
+
+        XCTAssertEqual(request.method, .put)
+        XCTAssertTrue(request.hasBody)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1:/note.txt:/content")
+    }
 }
