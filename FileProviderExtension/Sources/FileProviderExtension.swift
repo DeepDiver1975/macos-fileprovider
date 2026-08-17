@@ -78,10 +78,56 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
-        // Single-item lookup is added with the metadata cache; enumeration is the
-        // Task 6.0 make-or-break path and is wired below.
-        completionHandler(nil, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
+        // The system asks for a single item's current metadata. The root container
+        // is synthetic (no backend round-trip). Otherwise fetch it: oCIS GETs the
+        // driveItem (which carries its own parent); Classic reuses the Depth:0
+        // PROPFIND read-back, deriving the parent by dropping the last path segment
+        // (WebDAV hrefs don't carry a parent id).
+        if identifier == .rootContainer {
+            let root = FileProviderItemDescription.rootContainer(filename: domain.displayName)
+            completionHandler(FileProviderItem(itemDescription: root), nil)
+            return Progress()
+        }
+        Task {
+            do {
+                let connection = try await makeConnection()
+                let item = try await fetchItem(connection: connection, identifier: identifier)
+                completionHandler(item, nil)
+            } catch let error as RemoteError {
+                completionHandler(nil, error.asFileProviderError)
+            } catch {
+                completionHandler(nil, error)
+            }
+        }
         return Progress()
+    }
+
+    /// Fetch a single item's current metadata from the backend and reconcile it
+    /// into an `NSFileProviderItem`.
+    private func fetchItem(
+        connection: BackendConnection,
+        identifier: NSFileProviderItemIdentifier
+    ) async throws -> FileProviderItem {
+        let auth = FileProviderExtension.authorization(for: account)
+        switch connection.account.backend {
+        case .ocis:
+            let body = try await client.send(connection.itemMetadataRequest(itemID: identifier.rawValue), authorization: auth)
+            let item = try GraphJSONDecoder().decodeItem(body)
+            return FileProviderItem(itemDescription: FileProviderItemDescription(graphItem: item))
+        case .classic:
+            // The Classic identifier is the server-relative path; its parent is the
+            // path with the last segment removed ("/" for a child of the root).
+            let path = identifier.rawValue
+            let parentPath = (path as NSString).deletingLastPathComponent
+            let parent: ItemIdentifier = (parentPath.isEmpty || parentPath == "/")
+                ? .rootContainer
+                : ItemIdentifier(rawValue: parentPath)
+            let body = try await client.send(connection.readBackRequest(path: path), authorization: auth)
+            guard let description = try connection.readBackItem(fromPropfind: body, parentIdentifier: parent) else {
+                throw NSFileProviderError(.noSuchItem)
+            }
+            return FileProviderItem(itemDescription: description)
+        }
     }
 
     func fetchContents(

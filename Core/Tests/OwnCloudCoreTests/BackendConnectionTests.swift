@@ -209,6 +209,13 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
     }
 
+    func testOCISItemMetadataGetsTheItem() {
+        let request = ocisConnection().itemMetadataRequest(itemID: "item-9")
+
+        XCTAssertEqual(request.method, .get)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
+    }
+
     func testOCISMovePatchesItemWithNameAndParent() throws {
         let request = ocisConnection().moveRequest(itemID: "item-9", newName: "renamed.txt", newParentID: "parent-2")
 

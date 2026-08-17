@@ -147,6 +147,12 @@ public struct BackendConnection {
         graphBuilder.delete(driveID: driveID ?? "", itemID: itemID)
     }
 
+    /// Graph single-item metadata (oCIS): GET on `/items/{id}` — the response is
+    /// one driveItem, decoded via `GraphJSONDecoder.decodeItem` for `item(for:)`.
+    public func itemMetadataRequest(itemID: String) -> RemoteRequest {
+        graphBuilder.metadata(driveID: driveID ?? "", itemID: itemID)
+    }
+
     /// Graph move/rename (oCIS): PATCH the item with a new name and, when moving
     /// to a different container, the new `parentReference.id`. The ID-addressed
     /// counterpart of Classic's ``moveRequest(fromPath:toPath:)``.

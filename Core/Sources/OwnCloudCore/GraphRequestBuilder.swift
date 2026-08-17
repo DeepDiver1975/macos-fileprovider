@@ -59,6 +59,12 @@ public struct GraphRequestBuilder {
         RemoteRequest(method: .delete, url: itemURL(driveID: driveID, itemID: itemID))
     }
 
+    /// Fetch a single driveItem's metadata (`GET /items/{id}`, no `/content`) —
+    /// the response is one driveItem, decoded for `item(for:)` single-item lookup.
+    public func metadata(driveID: String, itemID: String) -> RemoteRequest {
+        RemoteRequest(method: .get, url: itemURL(driveID: driveID, itemID: itemID))
+    }
+
     /// List the drive root for enumeration (Phase 3). The first page is a plain
     /// `/root/children` GET; subsequent pages follow the opaque `$token` the
     /// server returned in `nextLink`/`deltaLink` (carried here as a ``PageCursor``)
