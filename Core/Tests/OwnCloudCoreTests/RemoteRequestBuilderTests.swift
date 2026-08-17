@@ -110,6 +110,22 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertTrue(req.hasBody)
     }
 
+    func testGraphUploadNewFileUnderRootUsesRootSegment() {
+        // With no parent id the file lands in the drive root, addressed by the
+        // `root:/name:/content` syntax rather than `items/{id}`.
+        let req = graph.uploadNewFileUnderRoot(driveID: driveID, name: "note.txt")
+        XCTAssertEqual(req.method, .put)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/root:/note.txt:/content"))
+        XCTAssertTrue(req.hasBody)
+    }
+
+    func testGraphCreateFolderUnderRootPostsToRootChildren() {
+        let req = graph.createFolderUnderRoot(driveID: driveID, name: "New Folder")
+        XCTAssertEqual(req.method, .post)
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/root/children"))
+        XCTAssertTrue(req.hasBody)
+    }
+
     // MARK: - Enumeration requests (Phase 3)
 
     func testWebDAVEnumerateIsPropfindDepthOne() {

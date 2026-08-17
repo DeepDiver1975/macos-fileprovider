@@ -95,9 +95,52 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
     ) -> Progress {
-        // Phase 4, Task 4.4 — uses ContentUploader; wired with the metadata cache
-        // that maps the created item back to a server address.
-        completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
+        // Phase 4, Task 4.4. oCIS reconciles the created item from the driveItem
+        // the server returns (its assigned id + eTag). Classic returns no metadata
+        // body on a PUT/MKCOL (it needs a follow-up PROPFIND), so that path stays
+        // pending the Task 6.0 live spike.
+        guard let connection else {
+            completionHandler(nil, [], false, NSFileProviderError(.notAuthenticated))
+            return Progress()
+        }
+        guard connection.account.backend == .ocis else {
+            completionHandler(nil, [], false, NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
+            return Progress()
+        }
+
+        let parent: ItemIdentifier = itemTemplate.parentItemIdentifier == .rootContainer
+            ? .rootContainer
+            : ItemIdentifier(rawValue: itemTemplate.parentItemIdentifier.rawValue)
+        let isDirectory = itemTemplate.contentType == .folder
+        let createRequest = connection.createItemRequest(
+            parentID: parent, name: itemTemplate.filename, isDirectory: isDirectory
+        )
+
+        let client = self.client
+        let uploader = ContentUploader(client: client)
+        let auth = FileProviderExtension.authorization(for: account)
+        Task {
+            do {
+                // A folder POST carries its JSON body in the request; a file PUT
+                // streams the contents the system handed us.
+                let responseBody: Data
+                if isDirectory {
+                    responseBody = try await client.send(createRequest, authorization: auth)
+                } else if let url {
+                    responseBody = try await uploader.uploadReturningBody(createRequest, fromFile: url, authorization: auth)
+                } else {
+                    // A non-directory create with no contents is a zero-byte file.
+                    responseBody = try await client.send(createRequest, body: Data(), authorization: auth)
+                }
+                let created = try GraphJSONDecoder().decodeItem(responseBody)
+                let item = FileProviderItem(itemDescription: FileProviderItemDescription(graphItem: created))
+                completionHandler(item, [], false, nil)
+            } catch let error as RemoteError {
+                completionHandler(nil, [], false, error.asFileProviderError)
+            } catch {
+                completionHandler(nil, [], false, error)
+            }
+        }
         return Progress()
     }
 

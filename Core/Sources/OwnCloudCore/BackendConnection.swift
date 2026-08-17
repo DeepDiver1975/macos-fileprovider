@@ -137,4 +137,24 @@ public struct BackendConnection {
     public func uploadNewFileRequest(parentID: String, name: String) -> RemoteRequest {
         graphBuilder.uploadNewFile(driveID: driveID ?? "", parentID: parentID, name: name)
     }
+
+    /// Graph create (oCIS): shape the request for creating `name` under `parentID`,
+    /// making the two routing decisions in one place — root vs. a specific parent
+    /// (Graph addresses the drive root by its `root` segment, not `items/{id}`),
+    /// and folder (POST `/children`) vs. file (PUT `:/name:/content`). The `.put`
+    /// file request carries the bytes; the `.post` folder request carries JSON.
+    public func createItemRequest(parentID: ItemIdentifier, name: String, isDirectory: Bool) -> RemoteRequest {
+        let drive = driveID ?? ""
+        let underRoot = parentID == .rootContainer
+        switch (isDirectory, underRoot) {
+        case (true, true):
+            return graphBuilder.createFolderUnderRoot(driveID: drive, name: name)
+        case (true, false):
+            return graphBuilder.createFolder(driveID: drive, parentID: parentID.rawValue, name: name)
+        case (false, true):
+            return graphBuilder.uploadNewFileUnderRoot(driveID: drive, name: name)
+        case (false, false):
+            return graphBuilder.uploadNewFile(driveID: drive, parentID: parentID.rawValue, name: name)
+        }
+    }
 }

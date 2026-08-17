@@ -18,6 +18,21 @@ public struct GraphRequestBuilder {
         return URL(string: baseURL.absoluteString + path) ?? baseURL
     }
 
+    /// The drive root, addressed by the `root` segment rather than `items/{id}` —
+    /// used for creating items in the top level of a drive.
+    private func rootURL(driveID: String, suffix: String = "") -> URL {
+        let path = "/graph/v1.0/drives/\(driveID)/root\(suffix)"
+        return URL(string: baseURL.absoluteString + path) ?? baseURL
+    }
+
+    /// Percent-encode a filename for the `:/name:/` path syntax (unreserved set;
+    /// spaces and reserved characters escape).
+    private static func encode(name: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name
+    }
+
     public func fetchContents(driveID: String, itemID: String) -> RemoteRequest {
         RemoteRequest(method: .get, url: itemURL(driveID: driveID, itemID: itemID, suffix: "/content"))
     }
@@ -56,15 +71,29 @@ public struct GraphRequestBuilder {
     /// `items/{parent}:/{name}:/content` path syntax. The response is the created
     /// driveItem the extension decodes to reconcile the server-assigned id.
     public func uploadNewFile(driveID: String, parentID: String, name: String) -> RemoteRequest {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        let encodedName = name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name
-        let url = itemURL(driveID: driveID, itemID: parentID, suffix: ":/\(encodedName):/content")
+        let url = itemURL(driveID: driveID, itemID: parentID, suffix: ":/\(Self.encode(name: name)):/content")
+        return RemoteRequest(method: .put, url: url, hasBody: true)
+    }
+
+    /// PUT a new file's bytes into the drive root, via the `root:/name:/content`
+    /// syntax — the root-parent form of ``uploadNewFile(driveID:parentID:name:)``.
+    public func uploadNewFileUnderRoot(driveID: String, name: String) -> RemoteRequest {
+        let url = rootURL(driveID: driveID, suffix: ":/\(Self.encode(name: name)):/content")
         return RemoteRequest(method: .put, url: url, hasBody: true)
     }
 
     /// POST a folder driveItem to the parent's `/children` collection.
     public func createFolder(driveID: String, parentID: String, name: String) -> RemoteRequest {
+        folderRequest(url: itemURL(driveID: driveID, itemID: parentID, suffix: "/children"), name: name)
+    }
+
+    /// POST a folder driveItem to the drive root's `/children` collection — the
+    /// root-parent form of ``createFolder(driveID:parentID:name:)``.
+    public func createFolderUnderRoot(driveID: String, name: String) -> RemoteRequest {
+        folderRequest(url: rootURL(driveID: driveID, suffix: "/children"), name: name)
+    }
+
+    private func folderRequest(url: URL, name: String) -> RemoteRequest {
         let body: [String: Any] = [
             "name": name,
             "folder": [String: String](),
@@ -74,7 +103,7 @@ public struct GraphRequestBuilder {
         let json = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
         return RemoteRequest(
             method: .post,
-            url: itemURL(driveID: driveID, itemID: parentID, suffix: "/children"),
+            url: url,
             headers: ["Content-Type": "application/json"],
             hasBody: true,
             jsonBody: json

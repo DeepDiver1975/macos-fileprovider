@@ -171,4 +171,34 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertTrue(request.hasBody)
         XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1:/note.txt:/content")
     }
+
+    // MARK: create-item routing (root vs. parent, file vs. folder)
+
+    func testOCISCreateFileUnderRootUsesRootSegment() {
+        let request = ocisConnection().createItemRequest(parentID: .rootContainer, name: "note.txt", isDirectory: false)
+
+        XCTAssertEqual(request.method, .put)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/root:/note.txt:/content")
+    }
+
+    func testOCISCreateFileUnderParentUsesItemSegment() {
+        let request = ocisConnection().createItemRequest(parentID: ItemIdentifier(rawValue: "parent-1"), name: "note.txt", isDirectory: false)
+
+        XCTAssertEqual(request.method, .put)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1:/note.txt:/content")
+    }
+
+    func testOCISCreateFolderUnderRootPostsToRootChildren() {
+        let request = ocisConnection().createItemRequest(parentID: .rootContainer, name: "New Folder", isDirectory: true)
+
+        XCTAssertEqual(request.method, .post)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/root/children")
+    }
+
+    func testOCISCreateFolderUnderParentPostsToItemChildren() {
+        let request = ocisConnection().createItemRequest(parentID: ItemIdentifier(rawValue: "parent-1"), name: "New Folder", isDirectory: true)
+
+        XCTAssertEqual(request.method, .post)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1/children")
+    }
 }
