@@ -14,7 +14,6 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     let domain: NSFileProviderDomain
     private let account: AccountDescriptor?
-    private let downloader: ContentDownloader
     private let client: RemoteClient
     /// Caches the oCIS drive-id resolution so `me/drives` is looked up once per
     /// extension instance, not per operation.
@@ -26,7 +25,6 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         self.client = client
         // The domain identifier round-trips the account (backend, server, user).
         self.account = AccountDescriptor(domainIdentifier: domain.identifier.rawValue)
-        self.downloader = ContentDownloader(client: client)
         super.init()
     }
 
@@ -136,11 +134,17 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
-        let downloader = self.downloader
         let auth = FileProviderExtension.authorization(for: account)
+        let domain = self.domain
+        let client = self.client
         Task {
             do {
                 let connection = try await makeConnection()
+                // The system requires BOTH the file URL and the item's current
+                // metadata on success — a nil item aborts the extension via the
+                // NSAssertionHandler in FPXExtensionContext.fetchContents. So fetch
+                // the item's metadata alongside its bytes.
+                let item = try await fetchItem(connection: connection, identifier: itemIdentifier)
                 let fetchRequest: RemoteRequest
                 switch connection.account.backend {
                 case .classic:
@@ -149,10 +153,14 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 case .ocis:
                     fetchRequest = connection.fetchContentsRequest(itemID: itemIdentifier.rawValue)
                 }
+                // The downloaded file must be a regular file on the same volume as
+                // the user-visible URL (FileProvider header contract), so download
+                // into the provider's own temporary directory.
+                let downloader = FileProviderExtension.downloader(for: domain, client: client)
                 let url = try await downloader.download(fetchRequest, authorization: auth)
-                // Hand the temp URL back; the system takes ownership. The item is
-                // supplied on the next enumeration/lookup pass.
-                completionHandler(url, nil, nil)
+                // Hand back the temp URL and the item; the system takes ownership
+                // of the file.
+                completionHandler(url, item, nil)
             } catch let error as RemoteError {
                 completionHandler(nil, nil, error.asFileProviderError)
             } catch {
@@ -160,6 +168,18 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
             }
         }
         return Progress()
+    }
+
+    /// A `ContentDownloader` that writes into the domain's provider temporary
+    /// directory, so the hydrated file lands on the same volume as the
+    /// user-visible URL (required by `fetchContents`). Falls back to the default
+    /// temp directory if the manager is unavailable.
+    private static func downloader(for domain: NSFileProviderDomain, client: RemoteClient) -> ContentDownloader {
+        if let manager = NSFileProviderManager(for: domain),
+           let tempDir = try? manager.temporaryDirectoryURL() {
+            return ContentDownloader(client: client, destinationDirectory: tempDir)
+        }
+        return ContentDownloader(client: client)
     }
 
     func createItem(
