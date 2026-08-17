@@ -110,4 +110,32 @@ final class ContentUploaderTests: XCTestCase {
             // expected — reading the file fails before any request is sent.
         }
     }
+
+    // MARK: Upload returning the response body (oCIS reconciliation)
+
+    func testUploadReturningBodyStreamsFileAndReturnsResponseBytes() async throws {
+        // oCIS returns the created/modified driveItem JSON in the response body,
+        // which the extension decodes to reconcile the server-assigned id + eTag.
+        var seen: URLRequest?
+        let responseJSON = Data(#"{ "id": "srv-1", "name": "upload.bin" }"#.utf8)
+        let uploader = ContentUploader(client: client(status: 201, body: responseJSON, capture: { seen = $0 }))
+
+        let body = try await uploader.uploadReturningBody(putRequest, fromFile: fileURL, authorization: "Bearer t")
+
+        XCTAssertEqual(seen?.httpBody, Data("local file bytes".utf8))
+        XCTAssertEqual(seen?.value(forHTTPHeaderField: "Authorization"), "Bearer t")
+        XCTAssertEqual(body, responseJSON)
+    }
+
+    func testUploadReturningBodyMapsConflict() async {
+        let uploader = ContentUploader(client: client(status: 412))
+        do {
+            _ = try await uploader.uploadReturningBody(putRequest, fromFile: fileURL, authorization: nil)
+            XCTFail("expected a thrown error")
+        } catch let error as RemoteError {
+            XCTAssertEqual(error, .versionConflict)
+        } catch {
+            XCTFail("expected RemoteError, got \(error)")
+        }
+    }
 }
