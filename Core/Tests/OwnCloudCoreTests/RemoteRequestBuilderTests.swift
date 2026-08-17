@@ -152,6 +152,32 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertTrue(body.contains("xmlns:oc=\"http://owncloud.org/ns\""))
     }
 
+    func testWebDAVPropertiesIsPropfindDepthZeroAtItemPath() {
+        // Classic returns no metadata body on PUT/MKCOL, so createItem reads the
+        // new item back with a Depth:0 PROPFIND on its own path (just that item,
+        // not its children).
+        let req = dav.properties(path: "/new.txt")
+        XCTAssertEqual(req.method, .propfind)
+        XCTAssertEqual(req.url, URL(string: "https://cloud.test/remote.php/dav/files/admin/new.txt"))
+        XCTAssertEqual(req.headers["Depth"], "0")
+        XCTAssertEqual(req.headers["Content-Type"], "application/xml")
+        XCTAssertTrue(req.hasBody)
+    }
+
+    func testWebDAVPropertiesBodyRequestsTheParsedProperties() {
+        // The read-back must ask for exactly the props WebDAVMultiStatusParser
+        // reads — the same body the Depth:1 enumerate PROPFIND uses.
+        let req = dav.properties(path: "/new.txt")
+        let body = String(data: req.jsonBody ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertTrue(body.contains("<d:propfind"))
+        for prop in ["d:getetag", "d:getcontentlength", "d:getcontenttype", "d:getlastmodified", "d:resourcetype"] {
+            XCTAssertTrue(body.contains(prop), "missing \(prop)")
+        }
+        for prop in ["oc:id", "oc:size", "oc:permissions"] {
+            XCTAssertTrue(body.contains(prop), "missing \(prop)")
+        }
+    }
+
     func testGraphEnumerateFirstPageIsGetOnRootChildren() {
         let req = graph.enumerate(driveID: driveID, cursor: nil)
         XCTAssertEqual(req.method, .get)

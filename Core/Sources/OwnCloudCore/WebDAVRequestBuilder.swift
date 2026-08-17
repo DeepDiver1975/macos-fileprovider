@@ -67,6 +67,21 @@ public struct WebDAVRequestBuilder {
         )
     }
 
+    /// PROPFIND `Depth: 0` for a single item's metadata (Phase 4 create
+    /// read-back). Classic returns no metadata body on a `PUT`/`MKCOL`, so
+    /// `createItem` reads the newly created item back with this to learn its
+    /// server-assigned etag/size. Depth:0 returns just the item at `path`, not
+    /// its children; the body asks for the same props as `enumerate`.
+    public func properties(path: String) -> RemoteRequest {
+        RemoteRequest(
+            method: .propfind,
+            url: url(for: path),
+            headers: ["Depth": "0", "Content-Type": "application/xml"],
+            hasBody: true,
+            jsonBody: Data(Self.propfindBody.utf8)
+        )
+    }
+
     /// The `PROPFIND` request body. Namespaced props mirror the parser's
     /// `(namespace, localName)` switch: DAV core plus the ownCloud extension
     /// props (`oc:id`, `oc:size`, `oc:permissions`, `oc:favorite`).

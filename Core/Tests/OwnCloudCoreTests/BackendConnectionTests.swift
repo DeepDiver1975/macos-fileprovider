@@ -133,6 +133,59 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertEqual(request.headers["Overwrite"], "F")
     }
 
+    func testClassicReadBackTargetsThePathWithDepthZeroPropfind() {
+        // Classic create has no metadata body, so createItem reads the new item
+        // back with a Depth:0 PROPFIND on its path.
+        let request = classicConnection().readBackRequest(path: "/folder/new.txt")
+
+        XCTAssertEqual(request.method, .propfind)
+        XCTAssertEqual(request.headers["Depth"], "0")
+        XCTAssertEqual(request.url.absoluteString, "https://cloud.test/remote.php/dav/files/admin/folder/new.txt")
+    }
+
+    func testClassicReadBackParsesTheSingleItemUnderTheGivenParent() throws {
+        let body = Data("""
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+          <d:response><d:href>/remote.php/dav/files/admin/folder/new.txt</d:href>
+            <d:propstat><d:prop>
+              <oc:id>server-id-42</oc:id>
+              <d:resourcetype/>
+              <d:getetag>"etag-after-put"</d:getetag>
+              <d:getcontentlength>5</d:getcontentlength>
+              <d:getcontenttype>text/plain</d:getcontenttype>
+            </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+        </d:multistatus>
+        """.utf8)
+
+        let description = try classicConnection().readBackItem(
+            fromPropfind: body,
+            parentIdentifier: ItemIdentifier(rawValue: "/folder")
+        )
+
+        // The server-assigned id and etag are what createItem could not know before
+        // the read-back; the parent is supplied by the caller (WebDAV hrefs don't
+        // carry it).
+        XCTAssertEqual(description?.identifier, ItemIdentifier(rawValue: "server-id-42"))
+        XCTAssertEqual(description?.filename, "new.txt")
+        XCTAssertEqual(description?.versionIdentifier, "\"etag-after-put\"")
+        XCTAssertEqual(description?.parentIdentifier, ItemIdentifier(rawValue: "/folder"))
+        XCTAssertEqual(description?.isDirectory, false)
+    }
+
+    func testClassicReadBackReturnsNilForEmptyMultistatus() throws {
+        let body = Data("""
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:"></d:multistatus>
+        """.utf8)
+
+        let description = try classicConnection().readBackItem(
+            fromPropfind: body, parentIdentifier: .rootContainer
+        )
+
+        XCTAssertNil(description)
+    }
+
     // MARK: Push request shaping — oCIS (ID-addressed)
 
     private func ocisConnection() -> BackendConnection {
