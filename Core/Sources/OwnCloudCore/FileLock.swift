@@ -15,9 +15,10 @@ import Glibc
 ///
 /// The lock file lives in the app group container in production; the path is
 /// injected so tests use a temp file.
-public final class FileLock {
+public final class FileLock: RefreshLock, @unchecked Sendable {
     private let path: String
     private var descriptor: Int32 = -1
+    private let mutex = NSLock()
 
     public init(path: String) {
         self.path = path
@@ -31,13 +32,8 @@ public final class FileLock {
     /// `false` if another holder has it. Opens (creating if needed) the lock file
     /// on first use. Throws only if the file cannot be opened at all.
     public func tryLockExclusive() throws -> Bool {
-        if descriptor < 0 {
-            descriptor = open(path, O_CREAT | O_RDWR, 0o644)
-            guard descriptor >= 0 else {
-                throw FileLockError.cannotOpen(path: path, errno: errno)
-            }
-        }
-        if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
+        let fd = try openIfNeeded()
+        if flock(fd, LOCK_EX | LOCK_NB) == 0 {
             return true
         }
         // EWOULDBLOCK means another holder has it — an expected outcome, not an error.
@@ -56,17 +52,26 @@ public final class FileLock {
     /// Run `body` while holding the exclusive lock, blocking until it is available,
     /// and release it afterwards even if `body` throws.
     public func withExclusiveLock<T>(_ body: () throws -> T) throws -> T {
+        let fd = try openIfNeeded()
+        guard flock(fd, LOCK_EX) == 0 else {
+            throw FileLockError.lockFailed(errno: errno)
+        }
+        defer { flock(fd, LOCK_UN) }
+        return try body()
+    }
+
+    /// Open the lock file (creating it) on first use, guarding the lazily-assigned
+    /// descriptor so the type is safe to share across threads.
+    private func openIfNeeded() throws -> Int32 {
+        mutex.lock()
+        defer { mutex.unlock() }
         if descriptor < 0 {
             descriptor = open(path, O_CREAT | O_RDWR, 0o644)
             guard descriptor >= 0 else {
                 throw FileLockError.cannotOpen(path: path, errno: errno)
             }
         }
-        guard flock(descriptor, LOCK_EX) == 0 else {
-            throw FileLockError.lockFailed(errno: errno)
-        }
-        defer { flock(descriptor, LOCK_UN) }
-        return try body()
+        return descriptor
     }
 }
 

@@ -1,5 +1,14 @@
 import Foundation
 
+/// Serializes credential refresh across processes (Task 7.6). The production
+/// conformer is a `flock` over a file in the app group container (``FileLock``);
+/// tests inject a fake. When no lock is configured a refresh runs directly, which
+/// is correct for the single-instance app and for Basic auth.
+public protocol RefreshLock: Sendable {
+    /// Run `body` while holding the exclusive lock, blocking until available.
+    func withExclusiveLock<T>(_ body: () throws -> T) throws -> T
+}
+
 /// Unified credential / session manager (progress.md Task 2.5).
 ///
 /// Produces the `Authorization` header for whichever scheme is stored, and — for
@@ -21,17 +30,20 @@ public final class SessionManager {
     private let now: () -> Date
     private let leeway: TimeInterval
     private let refresh: RefreshHandler?
+    private let refreshLock: RefreshLock?
 
     public init(
         store: CredentialStore,
         now: @escaping () -> Date = Date.init,
         leeway: TimeInterval = SessionManager.defaultRefreshLeeway,
-        refresh: RefreshHandler? = nil
+        refresh: RefreshHandler? = nil,
+        refreshLock: RefreshLock? = nil
     ) {
         self.store = store
         self.now = now
         self.leeway = leeway
         self.refresh = refresh
+        self.refreshLock = refreshLock
     }
 
     /// The `Authorization` header value for the current credentials.
@@ -60,10 +72,41 @@ public final class SessionManager {
 
     /// Refreshes the bearer token if it is due, persisting the result. No-op for
     /// basic auth, when no refresh handler is configured, or when still valid.
+    ///
+    /// Cross-process arbitration (Task 7.6): with a ``RefreshLock`` configured the
+    /// decision is made **under the lock** with a fresh read — so N instances
+    /// sharing one Keychain item do not each rotate the token and sign each other
+    /// out. The first instance in refreshes; the rest re-read, see a valid token,
+    /// and adopt it. On a refresh *failure* the item is re-read once before the
+    /// error is surfaced: the failure may just mean a winner beat us to it and
+    /// invalidated the token we tried to rotate.
     public func refreshTokenIfNeeded() throws {
         guard needsTokenRefresh() else { return }
-        guard case let .bearer(_, refreshToken, _) = store.load() else { return }
         guard let refresh else { return }
+
+        guard let refreshLock else {
+            // Single-instance / no arbitration: refresh directly.
+            try performRefresh(refresh)
+            return
+        }
+        try refreshLock.withExclusiveLock {
+            // Double-check: a winner may have refreshed while we waited for the lock.
+            guard needsTokenRefresh() else { return }
+            do {
+                try performRefresh(refresh)
+            } catch {
+                // Retry the decision once against the current item — a concurrent
+                // winner may have written a fresh token our failed rotation raced.
+                guard needsTokenRefresh() else { return }
+                throw error
+            }
+        }
+    }
+
+    /// Read the current refresh token, run the handler, and persist the result.
+    /// A no-op if the stored credential is not a bearer token.
+    private func performRefresh(_ refresh: RefreshHandler) throws {
+        guard case let .bearer(_, refreshToken, _) = store.load() else { return }
         let fresh = try refresh(refreshToken)
         store.save(fresh)
     }
