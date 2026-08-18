@@ -159,6 +159,7 @@ final class RemoteEnumerationSourceTests: XCTestCase {
             client: client(status: 200, body: graphBody(nextLink: "https://ocis.test/graph?$token=page2", deltaLink: nil)),
             builder: GraphRequestBuilder(baseURL: URL(string: "https://ocis.test")!),
             driveID: "drive-1",
+            itemID: "drive-1",
             authorization: "Bearer xyz"
         )
 
@@ -174,6 +175,7 @@ final class RemoteEnumerationSourceTests: XCTestCase {
             client: client(status: 200, body: graphBody(nextLink: nil, deltaLink: "https://ocis.test/graph?$token=sync-9")),
             builder: GraphRequestBuilder(baseURL: URL(string: "https://ocis.test")!),
             driveID: "drive-1",
+            itemID: "drive-1",
             authorization: "Bearer xyz"
         )
 
@@ -189,13 +191,14 @@ final class RemoteEnumerationSourceTests: XCTestCase {
             client: client(status: 200, body: graphBody(nextLink: nil, deltaLink: "https://ocis.test/graph?$token=done"), capture: { seen = $0 }),
             builder: GraphRequestBuilder(baseURL: URL(string: "https://ocis.test")!),
             driveID: "drive-1",
+            itemID: "drive-1",
             authorization: "Bearer xyz"
         )
 
         _ = try await source.fetchPage(cursor: PageCursor(rawValue: "page2"))
 
-        // A cursor drives the /root/delta endpoint (which also powers change tracking).
-        XCTAssertEqual(seen?.url?.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/root/delta?$token=page2")
+        // A cursor drives the item's /delta endpoint (which also powers change tracking).
+        XCTAssertEqual(seen?.url?.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/drive-1/delta?$token=page2")
         XCTAssertEqual(seen?.value(forHTTPHeaderField: "Authorization"), "Bearer xyz")
     }
 

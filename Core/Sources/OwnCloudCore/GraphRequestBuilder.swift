@@ -65,19 +65,20 @@ public struct GraphRequestBuilder {
         RemoteRequest(method: .get, url: itemURL(driveID: driveID, itemID: itemID))
     }
 
-    /// List the drive root for enumeration (Phase 3). The first page is a plain
-    /// `/root/children` GET; subsequent pages follow the opaque `$token` the
-    /// server returned in `nextLink`/`deltaLink` (carried here as a ``PageCursor``)
-    /// against the `/root/delta` endpoint, which also drives change tracking.
-    public func enumerate(driveID: String, cursor: PageCursor?) -> RemoteRequest {
-        let path: String
-        if let cursor {
-            path = "/graph/v1.0/drives/\(driveID)/root/delta?$token=\(cursor.rawValue)"
-        } else {
-            path = "/graph/v1.0/drives/\(driveID)/root/children"
-        }
-        let url = URL(string: baseURL.absoluteString + path) ?? baseURL
-        return RemoteRequest(method: .get, url: url)
+    /// List a container's children for enumeration (Phase 3), addressed by the
+    /// container's **item id** — `/items/{itemID}/children`. For the drive root the
+    /// item id is the drive's root id, which oCIS reports equal to the driveID
+    /// string. oCIS 8.2.0 does **not** implement the MS-Graph `/root/children`
+    /// shortcut (it 404s even with valid auth — proven live), so enumeration is
+    /// uniformly item-addressed; this also lets subfolders enumerate their own
+    /// children rather than re-listing the root.
+    ///
+    /// Subsequent pages follow the opaque `$token` the server returned in
+    /// `nextLink`/`deltaLink` (carried here as a ``PageCursor``) against the item's
+    /// `/delta` endpoint, which also drives change tracking.
+    public func enumerate(driveID: String, itemID: String, cursor: PageCursor?) -> RemoteRequest {
+        let suffix = cursor.map { "/delta?$token=\($0.rawValue)" } ?? "/children"
+        return RemoteRequest(method: .get, url: itemURL(driveID: driveID, itemID: itemID, suffix: suffix))
     }
 
     /// PUT a new file's bytes under its parent, addressed by name via the

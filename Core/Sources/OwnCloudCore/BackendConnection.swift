@@ -63,10 +63,15 @@ public struct BackendConnection {
                 authorization: authorization
             )
         case .ocis:
+            // Graph is item-addressed: the root container is the drive's root item
+            // (id == driveID); a subfolder's identifier is its own item id.
+            let drive = driveID ?? ""
+            let itemID = container == .rootContainer ? drive : container.rawValue
             return GraphEnumerationSource(
                 client: client,
                 builder: graphBuilder,
-                driveID: driveID ?? "",
+                driveID: drive,
+                itemID: itemID,
                 authorization: authorization
             )
         }

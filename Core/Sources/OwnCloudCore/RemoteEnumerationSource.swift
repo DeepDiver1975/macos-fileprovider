@@ -131,22 +131,28 @@ public struct GraphEnumerationSource: RemoteEnumerationSource {
     private let client: RemoteClient
     private let builder: GraphRequestBuilder
     private let driveID: String
+    /// The container item whose children this source enumerates. For the drive
+    /// root this is the root item id (== the driveID); for a subfolder it is that
+    /// folder's item id.
+    private let itemID: String
     private let authorization: String?
 
     public init(
         client: RemoteClient,
         builder: GraphRequestBuilder,
         driveID: String,
+        itemID: String,
         authorization: String?
     ) {
         self.client = client
         self.builder = builder
         self.driveID = driveID
+        self.itemID = itemID
         self.authorization = authorization
     }
 
     public func fetchPage(cursor: PageCursor?) async throws -> EnumerationPage {
-        let data = try await client.send(builder.enumerate(driveID: driveID, cursor: cursor), authorization: authorization)
+        let data = try await client.send(builder.enumerate(driveID: driveID, itemID: itemID, cursor: cursor), authorization: authorization)
         let collection = try GraphJSONDecoder().decodeItemCollection(data)
         return EnumerationPage(graphCollection: collection)
     }

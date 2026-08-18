@@ -113,8 +113,28 @@ final class BackendConnectionTests: XCTestCase {
         let source = connection.enumerationSource(for: .rootContainer)
         let page = try await source.fetchPage(cursor: nil)
 
-        XCTAssertEqual(seen?.url?.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/root/children")
+        // oCIS 8.2.0 404s on `/root/children` (proven live); the root container is
+        // enumerated by its item id, which for the root equals the drive id.
+        XCTAssertEqual(seen?.url?.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/drive-1/children")
         XCTAssertEqual(page.items.map(\.filename), ["a.txt"])
+    }
+
+    func testOCISSubfolderEnumerationTargetsItsItemChildren() async throws {
+        // Regression: descending into an oCIS subfolder must enumerate THAT item's
+        // children (`/items/{itemID}/children`), not re-list the drive root. The
+        // connection previously ignored the container id for oCIS, so every folder
+        // showed the root's contents.
+        var seen: URLRequest?
+        let account = AccountDescriptor(backend: .ocis, serverURL: URL(string: "https://ocis.test")!, username: "einstein")
+        let body = Data("""
+        { "value": [ { "id": "child-1", "name": "inner.txt", "size": 1, "eTag": "e", "file": { "mimeType": "text/plain" } } ] }
+        """.utf8)
+        let connection = BackendConnection(account: account, client: client(status: 200, body: body, capture: { seen = $0 }), authorization: "Bearer t", driveID: "drive-1")
+
+        let source = connection.enumerationSource(for: ItemIdentifier(rawValue: "drive-1!folder"))
+        _ = try await source.fetchPage(cursor: nil)
+
+        XCTAssertEqual(seen?.url?.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/drive-1!folder/children")
     }
 
     func testOCISFetchContentsTargetsTheItemContentEndpoint() {

@@ -217,20 +217,35 @@ final class RemoteRequestBuilderTests: XCTestCase {
         }
     }
 
-    func testGraphEnumerateFirstPageIsGetOnRootChildren() {
-        let req = graph.enumerate(driveID: driveID, cursor: nil)
+    func testGraphEnumerateFirstPageIsGetOnItemChildren() {
+        // oCIS 8.2.0 does NOT implement the MS-Graph `/drives/{id}/root/children`
+        // shortcut — it 404s even with valid auth (proven live). Enumeration must be
+        // item-addressed: `/items/{itemID}/children`, where the root container's
+        // itemID is the drive's root id (which equals the driveID string). Verified
+        // live: `/items/{rootID}/children` → HTTP 200 with the listing.
+        let req = graph.enumerate(driveID: driveID, itemID: driveID, cursor: nil)
         XCTAssertEqual(req.method, .get)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/root/children"))
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/1284d238$4c510ada/children"))
         XCTAssertFalse(req.hasBody)
     }
 
-    func testGraphEnumerateWithCursorFollowsThePageToken() {
-        let req = graph.enumerate(driveID: driveID, cursor: PageCursor(rawValue: "abc123"))
+    func testGraphEnumerateSubfolderTargetsItsItemChildren() {
+        // A subfolder enumerates its own item id's children — the same item-addressed
+        // form, so descending into folders works (Classic honours the container id;
+        // oCIS must too).
+        let req = graph.enumerate(driveID: driveID, itemID: "1284d238$4c510ada!folder", cursor: nil)
         XCTAssertEqual(req.method, .get)
-        // The cursor is the opaque $token carried by nextLink/deltaLink.
+        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/1284d238$4c510ada!folder/children"))
+    }
+
+    func testGraphEnumerateWithCursorFollowsThePageToken() {
+        let req = graph.enumerate(driveID: driveID, itemID: driveID, cursor: PageCursor(rawValue: "abc123"))
+        XCTAssertEqual(req.method, .get)
+        // The cursor is the opaque $token carried by nextLink/deltaLink; kept
+        // item-addressed for consistency with the first page.
         XCTAssertEqual(
             req.url,
-            URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/root/delta?$token=abc123")
+            URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/1284d238$4c510ada/delta?$token=abc123")
         )
     }
 }
