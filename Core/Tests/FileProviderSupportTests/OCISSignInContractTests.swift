@@ -45,12 +45,14 @@ final class OCISSignInContractTests: XCTestCase {
             throw XCTSkip("Set OWNCLOUD_TEST_BACKEND=ocis to run the oCIS sign-in contract tier.")
         }
         serverURL = URL(string: env["OWNCLOUD_TEST_URL"] ?? "https://localhost:9200")!
-        // A shared cookie jar so the scripted logon's SSO session carries into the
-        // authorize redirect, exactly as a browser would.
-        let config = URLSessionConfiguration.ephemeral
-        config.httpCookieStorage = HTTPCookieStorage()
-        config.httpCookieAcceptPolicy = .always
-        session = URLSession(configuration: config, delegate: OCISInsecureTrustDelegate(), delegateQueue: nil)
+        // The Konnect SSO cookie is captured from the logon response and replayed by
+        // hand on the authorize GET (URLSession's ephemeral store drops the
+        // `__Secure-`-prefixed cookie, and its initializer is unavailable on
+        // swift-corelibs-foundation), so no cookie storage is configured here.
+        session = URLSession(
+            configuration: .ephemeral,
+            delegate: OCISInsecureTrustDelegate(),
+            delegateQueue: nil)
     }
 
     override func tearDownWithError() throws {
