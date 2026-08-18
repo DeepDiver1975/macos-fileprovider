@@ -16,6 +16,16 @@ struct OwnCloudFileProviderApp: App {
             SettingsWindow(model: model)
                 // Task 7.9: the UI extension opens the app here on a re-auth error.
                 .onOpenURL { model.handleLaunch($0) }
+                #if DEBUG
+                // `-ocis-autorun 1` drives the oCIS harness non-interactively from the
+                // main window (secondary Windows don't auto-open) so a live oCIS mount
+                // can be exercised on a headless machine.
+                .task {
+                    if UserDefaults.standard.bool(forKey: "ocis-autorun") {
+                        await DevHarnessOCISModel().autorun()
+                    }
+                }
+                #endif
         }
         .windowResizability(.contentSize)
 
@@ -24,6 +34,9 @@ struct OwnCloudFileProviderApp: App {
         // (Task 6.0 spike); compiled only in DEBUG, kept out of the shipping window.
         Window("Dev Harness", id: "dev-harness") {
             DevHarnessView()
+        }
+        Window("Dev Harness — oCIS", id: "dev-harness-ocis") {
+            DevHarnessOCISView()
         }
         #endif
     }
