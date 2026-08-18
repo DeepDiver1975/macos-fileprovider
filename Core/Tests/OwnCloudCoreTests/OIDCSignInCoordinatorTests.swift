@@ -42,7 +42,7 @@ final class OIDCSignInCoordinatorTests: XCTestCase {
             sendToken: { request in
                 sentRequest = request
                 return Data("""
-                {"access_token":"at","refresh_token":"rt","expires_in":3600}
+                {"access_token":"at","refresh_token":"rt","expires_in":3600,"id_token":"h.p.s"}
                 """.utf8)
             })
 
@@ -55,6 +55,9 @@ final class OIDCSignInCoordinatorTests: XCTestCase {
         // The discovered configuration is returned so refresh can be wired to it.
         XCTAssertEqual(result.configuration.tokenEndpoint,
                        URL(string: "https://ocis.test/idp/token"))
+        // The raw id_token is surfaced so the account can be named from its claims
+        // (there is no typed username in an OIDC flow — Task 7.12).
+        XCTAssertEqual(result.idToken, "h.p.s")
 
         // The presented URL carried the PKCE challenge for our injected verifier.
         let presentedItems = URLComponents(url: presentedURL!, resolvingAgainstBaseURL: false)!.queryItems!
