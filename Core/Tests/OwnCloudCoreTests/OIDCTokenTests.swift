@@ -97,4 +97,15 @@ final class OIDCTokenTests: XCTestCase {
             XCTAssertEqual(error as? OIDCTokenError, .malformedResponse)
         }
     }
+
+    func testExtractsIDTokenWhenPresent() {
+        let json = Data(#"{ "access_token": "at", "id_token": "h.p.s" }"#.utf8)
+        XCTAssertEqual(OIDCTokenResponse.idToken(from: json), "h.p.s")
+    }
+
+    func testIDTokenIsNilWhenResponseOmitsItOrIsGarbage() {
+        // The refresh grant need not re-issue an id_token.
+        XCTAssertNil(OIDCTokenResponse.idToken(from: Data(#"{ "access_token": "at" }"#.utf8)))
+        XCTAssertNil(OIDCTokenResponse.idToken(from: Data("not json".utf8)))
+    }
 }

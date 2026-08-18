@@ -100,4 +100,14 @@ public enum OIDCTokenResponse {
             expiresAt: now.addingTimeInterval(expiresIn)
         )
     }
+
+    /// The `id_token` field of a token response, if present — the JWT the account is
+    /// named from (``OIDCIDToken``). Returns `nil` for non-JSON or a response that
+    /// omits it (the refresh grant, for one, need not re-issue it).
+    public static func idToken(from data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return object["id_token"] as? String
+    }
 }

@@ -26,10 +26,15 @@ public struct OIDCSignInCoordinator {
     public struct Success: Equatable {
         public let credentials: Credentials
         public let configuration: OIDCConfiguration
+        /// The raw `id_token` JWT from the token response, if the server issued one.
+        /// An OIDC sign-in has no typed username, so the account is named from this
+        /// token's claims (``OIDCIDToken``). `nil` when the response omits it.
+        public let idToken: String?
 
-        public init(credentials: Credentials, configuration: OIDCConfiguration) {
+        public init(credentials: Credentials, configuration: OIDCConfiguration, idToken: String?) {
             self.credentials = credentials
             self.configuration = configuration
+            self.idToken = idToken
         }
     }
 
@@ -93,6 +98,9 @@ public struct OIDCSignInCoordinator {
         // A brand-new sign-in has no prior refresh token to retain.
         let credentials = try OIDCTokenResponse.credentials(
             from: tokenData, now: now(), previousRefreshToken: "")
-        return Success(credentials: credentials, configuration: configuration)
+        return Success(
+            credentials: credentials,
+            configuration: configuration,
+            idToken: OIDCTokenResponse.idToken(from: tokenData))
     }
 }
