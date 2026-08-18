@@ -55,6 +55,15 @@ public struct AccountRecord: Sendable, Equatable, Hashable, Codable {
     }
 }
 
+/// The mutation seam the domain service (Task 7.5) drives the registry through, so
+/// its ordering logic is testable against a fake. `AccountRegistry` is the
+/// production conformer.
+public protocol AccountRegistering: AnyObject {
+    var accounts: [AccountRecord] { get }
+    func upsert(_ record: AccountRecord)
+    func remove(accountIdentifier: String)
+}
+
 /// The registry of known accounts (Task 7.3).
 ///
 /// The system domain list is the source of truth for *what syncs*; this registry
@@ -64,7 +73,7 @@ public struct AccountRecord: Sendable, Equatable, Hashable, Codable {
 ///
 /// A blob that no longer decodes is treated as "no accounts" rather than a crash —
 /// the same tolerant posture `KeychainCredentialStore` takes for a corrupt item.
-public final class AccountRegistry {
+public final class AccountRegistry: AccountRegistering {
     public static let storageKey = "com.owncloud.macos.fileprovider.accounts"
 
     private let store: KeyValueStore
