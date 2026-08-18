@@ -490,10 +490,15 @@ not an omission.
     `SettingsPresentation.swift` with `SettingsPresentationTests`. The SwiftUI shell
     (`App/Sources/SettingsWindow.swift` + `SettingsModel.swift`) is a thin `@MainActor`
     layer over those presenters and `DomainService`; it builds + `xcodebuild test` passes.
-  * **Remaining:** the **Classic** username/password sign-in is now built and verified live
+  * **Remaining:** the **Classic** username/password sign-in is built and verified live
     (Task 7.11 — `AddAccountSheet` + `SettingsModel.addAccount`, round-trip confirmed
-    2026-08-18); the **oCIS OIDC** flow via `ASWebAuthenticationSession` is still outstanding
-    and keeps this task `[~]`. Diagnostics/reset are wired but exercised only on a signed host.
+    2026-08-18). The **oCIS OIDC** flow's *headless core and adapters* are now built and
+    tested (Task 7.12): the PKCE Authorization-Code machinery, the discovery fetch (live
+    CI-proven against the oCIS fixture), and the `ASWebAuthenticationSession` presenter. What
+    keeps this task `[~]` is the last mile — wiring that core into `SettingsModel`'s oCIS
+    branch (redirect-scheme `Info.plist` entry, per-space drive resolution) and exercising it,
+    which needs an OIDC-capable fixture (the current Docker oCIS fixture is Basic-auth only).
+    Diagnostics/reset are wired but exercised only on a signed host.
 * [~] **Task 7.9:** the UI extension stays a **launcher**, not a settings host.
   `prepare(forError:)` shows a minimal "Reconnect" sheet that opens the app at that
   account's sign-in — no second OIDC implementation inside a sandboxed appex. Separately,
@@ -552,6 +557,46 @@ not an omission.
     the account appeared in the sidebar, the domain mounted in Finder and enumerated, and Sign
     Out removed both the domain and the account — the full lifecycle round-tripped. This is the
     live check that promotes the task to `[x]`.
+* [~] **Task 7.12:** the **oCIS OIDC sign-in** headless core + adapters — the counterpart of
+  Task 7.11 for the Infinite Scale backend, closing the OIDC half of the Task 7.8 gap. The
+  whole Authorization-Code + PKCE flow is built as pure, Linux-buildable core with the two
+  outside-world touchpoints (discovery fetch, browser presentation) injected as closures, so
+  the decision logic is fully headlessly tested.
+  * **Done (headless, TDD RED→GREEN):**
+    * `SHA256` — a dependency-free FIPS-180-4 implementation (the package stays
+      Foundation-only; no swift-crypto), pinned to the published FIPS/RFC vectors incl. the
+      one-million-'a' case (`SHA256Tests`).
+    * `PKCE` — RFC 7636 verifier generation + `S256` challenge (base64url-no-pad of
+      SHA-256(verifier)), pinned to the RFC 7636 Appendix B worked example (`PKCETests`).
+    * `OIDCConfiguration` — parses the `/.well-known/openid-configuration` discovery document
+      into issuer + authorization/token endpoints, rejecting non-JSON / missing endpoints
+      (`OIDCDiscoveryTests`).
+    * `OIDCAuthorizationRequest` — builds the authorize URL (`response_type=code`, PKCE
+      `S256`, state) and parses the redirect callback, validating `state` *before* the code,
+      surfacing server `error`, and rejecting a code-less callback (`OIDCAuthorizationTests`).
+    * `OIDCTokenRequestBuilder.exchange` — the `grant_type=authorization_code` POST redeeming
+      the code with the PKCE `code_verifier` (`OIDCCodeExchangeTests`), sharing the form
+      encoder with the already-built `refresh` grant.
+    * `OIDCSignInCoordinator` — composes all of the above into one async `signIn(serverURL:)`
+      returning `.bearer` credentials + the discovered configuration (so refresh — Task 7.6 /
+      2.5 — wires to the same token endpoint). State/verifier/`now`/`fetchDiscovery`/
+      `authorize`/`sendToken` are all injected, so the happy path and the state-mismatch abort
+      are deterministic (`OIDCSignInCoordinatorTests`). Part of the 331-test suite.
+  * **Discovery proven live (CI on every PR):** `HTTPOIDCDiscovery` (the oCIS sibling of
+    `HTTPServerProbe`) GETs the live IDP's discovery document and parses it. `OIDCDiscoveryContractTests`
+    runs it against the Docker oCIS fixture — asserting the endpoints come back on the fixture
+    host — and joins the backend-contract job (`swift test --filter
+    'BackendContract|ServerProbeContract|OIDCDiscoveryContract'`, gated on
+    `OWNCLOUD_TEST_BACKEND=ocis`, self-skips on the Classic leg). Verified green locally on
+    2026-08-18 against `https://localhost:9200`.
+  * **Mac-gated adapter (built, GUI-gated):** `WebAuthorizationPresenter` drives the
+    authorization URL through `ASWebAuthenticationSession` (`#if canImport(AuthenticationServices)`),
+    supplying the coordinator's `authorize` closure. Its only untested part is the system
+    browser sheet itself — the same GUI gate as the Classic Finder round-trip.
+  * **Remaining (keeps `[~]`):** wiring the coordinator into `SettingsModel`'s oCIS branch
+    (a redirect-scheme `Info.plist` entry + per-space drive resolution) and a live end-to-end
+    exercise — both need an **OIDC-capable oCIS fixture**; the current Docker fixture is
+    Basic-auth only (`PROXY_ENABLE_BASIC_AUTH`, fixtures-only). This is the Task 6.0/6.3 tier.
 * **Acceptance gate:** the configuration scenario group above, green on both backends
   (Classic exercising the account/sign-out half, oCIS the space-selection half per AC-1's
   tagging), plus the Phase 5 lifecycle gate it extends.
@@ -710,3 +755,4 @@ Not present in the client suites, and specific to this platform:
 * *2026-08-18 (follow-up)*: **Task 7.11's probe promoted from "compiles" to "proven live", and the automatable slice of its remainder closed (313 core tests + 5 skipped in the unit run; 2 new live tests green against the Docker Classic fixture; signed `xcodebuild build` BUILD SUCCEEDED).** `HTTPServerProbe` was the one sign-in adapter with no test — its whole job is turning a live server's two endpoint responses into a `BackendProbeResult`, so a headless unit test can't cover it. Added `ServerProbeContractTests` (in `FileProviderSupportTests`), a live contract tier mirroring `BackendContractTests`: it probes the real fixture and runs the result through `SignInResolver`, asserting `hasOpenIDConfiguration == false`, a non-nil `status.php` body, `BackendDetector.detect == .classic`, and a resolved Classic `.basic` account with a nil-drive `SyncRoot`. Ran it locally against `make up BACKEND=classic` — both tests pass. Dropped the unnecessary `#if canImport(FileProvider)` guard from `ServerProbe.swift` (it uses only `RemoteClient` + Foundation, so it's Linux-buildable like the rest of the contract path), and wired the tier into the existing classic backend-contract CI job (`swift test --filter 'BackendContract|ServerProbeContract'`) so it runs on **every PR**, self-skipping on the oCIS matrix leg. What genuinely remains is GUI-only and cannot be automated headlessly: the Finder mount + System Settings extension approval + Sign-Out round-trip on an installed build — a human-at-the-machine step, documented under Task 7.11 like Phase 7's other live remainders.
 * *2026-08-18 (Task 7.11 verified live → `[x]`)*: ran the manual Finder round-trip on the installed signed build against the local Classic fixture (`make up BACKEND=classic`, `make install`, both `.appex` registered per `pluginkit -mAv`). Add Account `http://localhost:8080` admin/admin → the `admin@localhost` (Classic) account appeared in the sidebar (proving probe → resolve → Keychain write → `DomainService.addSpace` → registry → reload), the domain mounted in Finder and enumerated, and **Sign Out** removed both the domain and the account — the full lifecycle round-tripped. With the headless core CI-proven (`SignInResolver` unit tests + the live `ServerProbeContractTests`) and the live UI now confirmed, Task 7.11 is marked `[x]`.
 * *2026-08-18 (Task 7.5 promoted to `[x]` on the same evidence)*: re-examining the `[~]` tasks against what the 7.11 round-trip actually exercised, **Task 7.5's** documented remainder — the live `NSFileProviderManager.add`/`remove`/`getDomains` calls on a signed host — was in fact driven end to end by that round-trip: Add Account went `addSpace` → `SystemDomainManager.add` → `NSFileProviderManager.add` (domain mounted in Finder), the sidebar populated through `existingSyncRoots` → `getDomains`, and Sign Out went `signOut` → remove domain + delete credential + delete record → `NSFileProviderManager.remove` (domain + account both gone). The record-first-on-add / record-last-on-remove ordering ran against the live system. Marked `[x]`; the orphan-only-on-confirmation and concurrent-multi-instance reconcile paths stay unit-tested and belong to the Task 6.3 fixture tier. **Task 7.8** had its Classic sign-in half closed by 7.11 too, but stays `[~]` because its oCIS OIDC (`ASWebAuthenticationSession`) half is genuinely unbuilt. The rest (7.6, 7.7, 7.9, 7.10) keep `[~]`: each has a real remainder that needs the Mac/Docker end-to-end tier (Task 6.0/6.3) — a live refresh-race, a live `disconnect`/`reconnect` against a deleted drive, the appex→app hand-off, and the acceptance runner — none of which the Classic sign-in round-trip touched, so promoting them would be false reporting.
+* *2026-08-18 (Task 7.12 — the oCIS OIDC sign-in headless core + adapters)*: built the Infinite Scale counterpart of 7.11's Classic flow, all test-first (331 core tests green + 6 skipped; `swift build` + signed `xcodebuild build` both succeed). The whole OAuth2 Authorization-Code + PKCE flow is pure, Linux-buildable core with the outside-world touchpoints injected as closures, so the decision logic is fully headlessly tested — the pattern established by `OIDCRefreshHandler`. Pieces, in build order (each RED→GREEN, watched to fail for a missing-type reason first): (1) **`SHA256`** — a dependency-free FIPS-180-4 hash, because the package is deliberately Foundation-only (no swift-crypto); pinned to the published FIPS/RFC vectors incl. the one-million-'a' case. (2) **`PKCE`** — RFC 7636 verifier + `S256` challenge (base64url-no-pad of SHA-256(verifier)), pinned to the RFC 7636 Appendix B worked example so the base64url + hash wiring is verified against the standard, not itself. (3) **`OIDCConfiguration`** — parses `/.well-known/openid-configuration` into issuer/authorization/token endpoints, rejecting non-JSON or a missing endpoint. (4) **`OIDCAuthorizationRequest`** — builds the authorize URL (`response_type=code`, PKCE `S256`, state) and parses the redirect callback, validating `state` *before* the code (CSRF), surfacing a server `error`, rejecting a code-less callback. (5) **`OIDCTokenRequestBuilder.exchange`** — the `grant_type=authorization_code` POST redeeming the code with the `code_verifier`, sharing the form encoder with the already-built `refresh` grant. (6) **`OIDCSignInCoordinator`** — composes all of the above into one async `signIn(serverURL:)` returning `.bearer` credentials (via the existing `OIDCTokenResponse.credentials`) + the discovered configuration so refresh (Task 7.6/2.5) wires to the same token endpoint; state/verifier/`now` and all three network/UI closures are injected, so the happy path and the state-mismatch abort are deterministic. **Discovery proven live (CI, every PR):** `HTTPOIDCDiscovery` (`FileProviderSupport`, the oCIS sibling of `HTTPServerProbe`) GETs the live IDP's discovery document and parses it; `OIDCDiscoveryContractTests` runs it against the Docker oCIS fixture (trusting the self-signed cert with the same test-only `InsecureTrustDelegate` as `BackendContractTests`) and joins the backend-contract job (`--filter 'BackendContract|ServerProbeContract|OIDCDiscoveryContract'`, gated on `OWNCLOUD_TEST_BACKEND=ocis`, self-skips on the Classic leg). Ran it locally against `make up BACKEND=ocis` (`https://localhost:9200`) — green. **Mac-gated adapter (built, GUI-gated):** `WebAuthorizationPresenter` drives the authorize URL through `ASWebAuthenticationSession` (`#if canImport(AuthenticationServices)`, `prefersEphemeralWebBrowserSession`), supplying the coordinator's `authorize` closure; only the system browser sheet is untested — the same GUI gate as the Classic Finder round-trip. **What keeps 7.8/7.12 `[~]`:** wiring the coordinator into `SettingsModel`'s oCIS branch (a redirect-scheme `Info.plist` entry + per-space drive resolution) and a live end-to-end exercise both need an **OIDC-capable oCIS fixture** — the current Docker fixture is Basic-auth only (`PROXY_ENABLE_BASIC_AUTH`, fixtures-only). That is the Task 6.0/6.3 tier.

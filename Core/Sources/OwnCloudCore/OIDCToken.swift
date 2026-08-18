@@ -31,6 +31,25 @@ public struct OIDCTokenRequestBuilder {
         if let scope {
             fields.append(("scope", scope))
         }
+        return post(fields)
+    }
+
+    /// A `grant_type=authorization_code` POST that redeems the code the browser
+    /// handed back for tokens (RFC 6749 §4.1.3 + RFC 7636 §4.5). `code_verifier` is
+    /// the PKCE secret proving this client began the flow; `redirect_uri` must match
+    /// the one sent to the authorization endpoint.
+    public func exchange(code: String, redirectURI: String, clientID: String, codeVerifier: String) -> RemoteRequest {
+        post([
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirectURI),
+            ("client_id", clientID),
+            ("code_verifier", codeVerifier),
+        ])
+    }
+
+    /// Shape a form-encoded POST to the token endpoint from ordered fields.
+    private func post(_ fields: [(String, String)]) -> RemoteRequest {
         let body = fields
             .map { "\($0.0)=\(Self.formEncode($0.1))" }
             .joined(separator: "&")
