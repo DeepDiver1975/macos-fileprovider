@@ -502,14 +502,20 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         // `enumerator(for:)` is synchronous, but oCIS drive-id resolution is async.
         // Defer building the real source (which needs a resolved `BackendConnection`)
         // to the first page fetch via `LazyRemoteEnumerationSource`.
-        let container: ItemIdentifier = containerItemIdentifier == .rootContainer
+        let isRoot = containerItemIdentifier == .rootContainer
+        let container: ItemIdentifier = isRoot
             ? .rootContainer
             : ItemIdentifier(rawValue: containerItemIdentifier.rawValue)
         let source = LazyRemoteEnumerationSource {
             let connection = try await self.makeConnection()
             return connection.enumerationSource(for: container)
         }
-        return ItemEnumerator(source: source)
+        // Task 7.7: a root-404 means the space vanished — disconnect the domain
+        // (keeping downloaded files) rather than failing every operation forever.
+        return ItemEnumerator(
+            source: source,
+            isRootContainer: isRoot,
+            availabilityReactor: isRoot ? DomainDisconnector(domain: domain) : nil)
     }
 
     // MARK: Credentials

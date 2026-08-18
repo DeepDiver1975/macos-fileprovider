@@ -1,6 +1,6 @@
 #if canImport(FileProvider)
 import Foundation
-import FileProvider
+@preconcurrency import FileProvider
 import OwnCloudCore
 
 /// The Mac-only adapter wiring `NSFileProviderManager` into the headless
@@ -62,6 +62,37 @@ public struct KeychainCredentialDeleter: CredentialDeleting {
         // (should never occur for a record we wrote) is a no-op.
         guard let account = AccountDescriptor(accountIdentifier: accountIdentifier) else { return }
         KeychainCredentialStore(account: account, accessGroup: accessGroup).clear()
+    }
+}
+
+/// Reacts to a space vanishing server-side (Task 7.7). The reactor disconnects the
+/// domain — Finder shows the reason and stops retrying — and never removes it.
+public protocol SpaceAvailabilityReacting: Sendable {
+    func disconnect(reason: String) async
+}
+
+/// The Mac-only reactor: disconnects (and can reconnect) a specific domain through
+/// its `NSFileProviderManager` (Task 7.7). Disconnect keeps materialised files;
+/// reconnect is called when the space returns. Removal is never done here — it
+/// stays a deliberate user action in the settings window.
+public struct DomainDisconnector: SpaceAvailabilityReacting {
+    private let domain: NSFileProviderDomain
+
+    public init(domain: NSFileProviderDomain) {
+        self.domain = domain
+    }
+
+    public func disconnect(reason: String) async {
+        guard let manager = NSFileProviderManager(for: domain) else { return }
+        // A failure to disconnect is non-fatal: the enumeration error is still
+        // surfaced to the system regardless.
+        try? await manager.disconnect(reason: reason, options: [])
+    }
+
+    /// Reconnect the domain once the space is available again.
+    public func reconnect() async {
+        guard let manager = NSFileProviderManager(for: domain) else { return }
+        try? await manager.reconnect()
     }
 }
 

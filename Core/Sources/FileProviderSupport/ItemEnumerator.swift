@@ -19,6 +19,11 @@ public final class ItemEnumerator: NSObject, NSFileProviderEnumerator {
     /// the real network-backed path.
     private let enumerate: () async throws -> EnumerationResult
     private let changeProvider: ChangeProvider?
+    /// Reacts to a vanished space (Task 7.7). Consulted when this enumerator is for
+    /// the root container and enumeration fails; a root-404 disconnects the domain
+    /// (never removes it). `nil` for non-root enumerators and the in-memory path.
+    private let availabilityReactor: SpaceAvailabilityReacting?
+    private let isRootContainer: Bool
 
     /// The most recent anchor observed from a completed enumeration, surfaced via
     /// ``currentSyncAnchor(completionHandler:)``. `nil` until the first pass.
@@ -29,13 +34,24 @@ public final class ItemEnumerator: NSObject, NSFileProviderEnumerator {
     public init(paginator: Paginator, changeProvider: ChangeProvider? = nil) {
         self.enumerate = { try paginator.enumerateAll() }
         self.changeProvider = changeProvider
+        self.availabilityReactor = nil
+        self.isRootContainer = false
     }
 
     /// Network-backed enumeration: walks a ``RemoteEnumerationSource`` (WebDAV or
     /// Graph) page by page over real async I/O.
-    public init(source: RemoteEnumerationSource, changeProvider: ChangeProvider? = nil) {
+    ///
+    /// `isRootContainer` and `availabilityReactor` wire Task 7.7: when the root
+    /// enumeration returns 404 the space has vanished and the domain is disconnected
+    /// with a user-facing reason, rather than failing every operation forever.
+    public init(source: RemoteEnumerationSource,
+                changeProvider: ChangeProvider? = nil,
+                isRootContainer: Bool = false,
+                availabilityReactor: SpaceAvailabilityReacting? = nil) {
         self.enumerate = { try await enumerateAll(from: source) }
         self.changeProvider = changeProvider
+        self.isRootContainer = isRootContainer
+        self.availabilityReactor = availabilityReactor
     }
 
     public func invalidate() {
@@ -51,6 +67,13 @@ public final class ItemEnumerator: NSObject, NSFileProviderEnumerator {
                 observer.didEnumerate(result.items.map(FileProviderItem.init(itemDescription:)))
                 observer.finishEnumerating(upTo: nil)
             } catch {
+                // Task 7.7: a root-404 means the space vanished — disconnect the
+                // domain (keeping downloaded files) instead of just failing.
+                if isRootContainer, let reactor = availabilityReactor,
+                   let remote = error as? RemoteError,
+                   case let .disconnect(reason) = SpaceAvailability.decide(forRootEnumeration: remote) {
+                    await reactor.disconnect(reason: reason)
+                }
                 observer.finishEnumeratingWithError(error)
             }
         }

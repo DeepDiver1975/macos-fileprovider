@@ -90,6 +90,58 @@ final class EnumeratorAdapterTests: XCTestCase {
         XCTAssertNotNil(observer.finishError)
     }
 
+    // MARK: Task 7.7 — vanished space disconnects (root only)
+
+    func testRootEnumerationNotFoundDisconnectsTheDomain() {
+        // The root enumeration returns 404 → the space vanished → disconnect.
+        let reactor = SpyReactor()
+        let enumerator = ItemEnumerator(
+            source: ThrowingAsyncSource(error: RemoteError.noSuchItem),
+            isRootContainer: true,
+            availabilityReactor: reactor)
+
+        let observer = FakeEnumerationObserver()
+        enumerator.enumerateItems(for: observer, startingAt: firstPage)
+        observer.wait(self)
+
+        // The error is still surfaced, and the domain was disconnected with a reason.
+        XCTAssertNotNil(observer.finishError)
+        reactor.wait(self)
+        XCTAssertEqual(reactor.disconnectReason, SpaceAvailability.spaceUnavailableReason)
+    }
+
+    func testNonRootEnumerationNotFoundDoesNotDisconnect() {
+        // A 404 on a subfolder means just that folder is gone — never disconnect.
+        let reactor = SpyReactor()
+        let enumerator = ItemEnumerator(
+            source: ThrowingAsyncSource(error: RemoteError.noSuchItem),
+            isRootContainer: false,
+            availabilityReactor: reactor)
+
+        let observer = FakeEnumerationObserver()
+        enumerator.enumerateItems(for: observer, startingAt: firstPage)
+        observer.wait(self)
+
+        XCTAssertNotNil(observer.finishError)
+        XCTAssertNil(reactor.disconnectReason)
+    }
+
+    func testRootEnumerationServerErrorDoesNotDisconnect() {
+        // Transient server trouble on the root is not a vanished space.
+        let reactor = SpyReactor()
+        let enumerator = ItemEnumerator(
+            source: ThrowingAsyncSource(error: RemoteError.serverError),
+            isRootContainer: true,
+            availabilityReactor: reactor)
+
+        let observer = FakeEnumerationObserver()
+        enumerator.enumerateItems(for: observer, startingAt: firstPage)
+        observer.wait(self)
+
+        XCTAssertNotNil(observer.finishError)
+        XCTAssertNil(reactor.disconnectReason)
+    }
+
     // MARK: enumerateChanges
 
     func testEnumerateChangesReportsUpdatesDeletionsAndAnchor() {
@@ -169,6 +221,19 @@ private struct ScriptedAsyncSource: RemoteEnumerationSource {
 private struct ThrowingAsyncSource: RemoteEnumerationSource {
     let error: Error
     func fetchPage(cursor: PageCursor?) async throws -> EnumerationPage { throw error }
+}
+
+// MARK: - Task 7.7 reactor spy
+
+private final class SpyReactor: SpaceAvailabilityReacting, @unchecked Sendable {
+    private(set) var disconnectReason: String?
+    private let done = XCTestExpectation(description: "disconnect called")
+
+    func disconnect(reason: String) async {
+        disconnectReason = reason
+        done.fulfill()
+    }
+    func wait(_ test: XCTestCase) { test.wait(for: [done], timeout: 5) }
 }
 
 // MARK: - Fakes
