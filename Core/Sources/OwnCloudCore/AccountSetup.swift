@@ -1,7 +1,7 @@
 import Foundation
 
 /// Which backend an account talks to.
-public enum Backend: String, Sendable, Equatable {
+public enum Backend: String, Sendable, Equatable, Codable {
     case classic
     case ocis
 }

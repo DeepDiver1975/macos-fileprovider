@@ -5,7 +5,7 @@ import Foundation
 /// For oCIS this is a Graph drive (space); for Classic there is a single implicit
 /// space over the files root, whose `driveID` is `nil` (Classic domains are
 /// path-addressed, so they carry no drive id).
-public struct Space: Sendable, Equatable {
+public struct Space: Sendable, Equatable, Codable {
     public let driveID: String?
     public let name: String
     public let driveType: String?
@@ -30,7 +30,7 @@ public struct Space: Sendable, Equatable {
 
 /// The set of spaces an account can sync (Task 7.2). Built from a Graph
 /// `me/drives` listing for oCIS, or the single files root for Classic.
-public struct SpaceCatalog: Sendable, Equatable {
+public struct SpaceCatalog: Sendable, Equatable, Codable {
     public let spaces: [Space]
 
     public init(spaces: [Space]) {
