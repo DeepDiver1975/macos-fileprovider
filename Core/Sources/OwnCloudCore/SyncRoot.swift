@@ -8,7 +8,7 @@ import Foundation
 /// the ``AccountDescriptor/accountIdentifier`` stays the verbatim tail and its own
 /// parser handles it unchanged. This is the identifier the extension is handed and
 /// must reconstruct both the account and (for oCIS) the drive from.
-public struct SyncRoot: Sendable, Equatable {
+public struct SyncRoot: Sendable, Equatable, Hashable {
     public let account: AccountDescriptor
     /// The oCIS drive (space) this domain maps to, or `nil` for Classic.
     public let driveID: String?

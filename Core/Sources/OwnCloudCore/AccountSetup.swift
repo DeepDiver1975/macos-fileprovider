@@ -52,7 +52,7 @@ public enum BackendDetector {
 /// the account identity (``accountIdentifier``, which keys the Keychain item) is
 /// deliberately distinct from the *domain* identity (``SyncRoot/domainIdentifier``,
 /// Task 7.1): N spaces of one account share one credential item.
-public struct AccountDescriptor: Sendable, Equatable {
+public struct AccountDescriptor: Sendable, Equatable, Hashable {
     public let backend: Backend
     public let serverURL: URL
     public let username: String
