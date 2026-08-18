@@ -76,11 +76,14 @@ jobs:
           # BackendContract covers the WebDAV/Graph request+parse layer for both
           # backends; ServerProbeContract exercises the Classic sign-in probe
           # (Task 7.11) end to end; OIDCDiscoveryContract exercises the oCIS sign-in
-          # discovery fetch (Task 7.8); ClassicBackendAdminContract exercises the
-          # acceptance harness's Classic fixture-provisioning action bodies (Task 6.3)
-          # against the live server. Each self-skips on the backend leg it does not
-          # apply to.
-          cd Core && swift test --filter 'BackendContract|ServerProbeContract|OIDCDiscoveryContract|ClassicBackendAdminContract'
+          # discovery fetch (Task 7.8); OCISSignInContract drives the whole oCIS OIDC
+          # sign-in chain — discovery → authorize → PKCE code exchange → bearer
+          # credential → me/drives → OCISSignInResolver → refresh grant — against the
+          # live Konnect IDP, with the browser step scripted via Konnect's logon API
+          # (Tasks 7.8/7.12/2.5); ClassicBackendAdminContract exercises the acceptance
+          # harness's Classic fixture-provisioning action bodies (Task 6.3) against the
+          # live server. Each self-skips on the backend leg it does not apply to.
+          cd Core && swift test --filter 'BackendContract|ServerProbeContract|OIDCDiscoveryContract|OCISSignInContract|ClassicBackendAdminContract'
       - name: Collect server logs on failure (AC-6)
         if: failure()
         run: docker compose -f test/fixtures/${{ matrix.backend }}/docker-compose.yml logs > backend-logs.txt
