@@ -61,6 +61,24 @@ final class BackendContractTests: XCTestCase {
         XCTAssertTrue(drives.contains { $0.driveType == "personal" })
     }
 
+    // MARK: oCIS — the space catalog built through the listDrives() builder
+
+    func testOCISSpaceCatalogFromListDrivesBuilder() throws {
+        try XCTSkipUnless(backend == .ocis, "oCIS-only.")
+        // Task 7.2: fetch the catalog through the real GraphRequestBuilder.listDrives()
+        // request (not a hand-built URL) and map it to a SpaceCatalog.
+        let builder = GraphRequestBuilder(baseURL: config.serverURL)
+        let (data, status) = try send(builder.listDrives())
+        XCTAssertEqual(status, 200)
+
+        let catalog = SpaceCatalog(drives: try GraphJSONDecoder().decodeDriveList(data))
+        XCTAssertFalse(catalog.spaces.isEmpty, "admin has at least a personal space")
+        XCTAssertTrue(catalog.spaces.contains { $0.driveType == "personal" })
+        // A drive the token cannot see never appears — the listing is scoped to the
+        // authenticated user's drives, so a fabricated id is absent by construction.
+        XCTAssertFalse(catalog.spaces.contains { $0.driveID == "space-the-token-cannot-see" })
+    }
+
     // MARK: Shared transport
 
     /// Issue `remote` synchronously with Basic auth, returning body + status.
