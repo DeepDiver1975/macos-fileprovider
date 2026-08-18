@@ -75,8 +75,10 @@ jobs:
           # OWNCLOUD_TEST_BACKEND env var so they are skipped in the pure-unit run.
           # BackendContract covers the WebDAV/Graph request+parse layer for both
           # backends; ServerProbeContract exercises the Classic sign-in probe
-          # (Task 7.11) end to end and self-skips on the oCIS matrix leg.
-          cd Core && swift test --filter 'BackendContract|ServerProbeContract'
+          # (Task 7.11) end to end; OIDCDiscoveryContract exercises the oCIS sign-in
+          # discovery fetch (Task 7.8). Each self-skips on the backend leg it does
+          # not apply to.
+          cd Core && swift test --filter 'BackendContract|ServerProbeContract|OIDCDiscoveryContract'
       - name: Collect server logs on failure (AC-6)
         if: failure()
         run: docker compose -f test/fixtures/${{ matrix.backend }}/docker-compose.yml logs > backend-logs.txt
