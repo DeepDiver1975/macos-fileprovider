@@ -18,10 +18,11 @@ final class DomainAdapterTests: XCTestCase {
         username: "einstein"
     )
 
-    func testDomainUsesDescriptorIdentifierAndDisplayName() {
-        let domain = NSFileProviderDomain(account: account)
-        XCTAssertEqual(domain.identifier.rawValue, account.domainIdentifier)
-        XCTAssertEqual(domain.displayName, account.displayName)
+    func testDomainUsesSyncRootIdentifierAndGivenDisplayName() {
+        let syncRoot = SyncRoot(account: account, driveID: "personal-drive")!
+        let domain = NSFileProviderDomain(syncRoot: syncRoot, displayName: "Personal")
+        XCTAssertEqual(domain.identifier.rawValue, syncRoot.domainIdentifier)
+        XCTAssertEqual(domain.displayName, "Personal")
     }
 
     func testPreserveDownloadedMapsToPreserveDownloadedUserData() {

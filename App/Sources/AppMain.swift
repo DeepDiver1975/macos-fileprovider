@@ -1,37 +1,30 @@
 import SwiftUI
 import OwnCloudCore
 
-// Containing app entry point (scaffold for Task 1.1).
+// Containing app entry point (Task 1.1 scaffold; Task 7.8 makes it the settings app).
 //
-// The app's real job (Task 5.1) is to host the sign-in flow and register the
-// File Provider domain via NSFileProviderManager. On macOS the extension is
-// only discovered when this app lives in /Applications (or ~/Applications), or
-// when FileProvider testing mode is enabled — see progress.md Task 5.1.
+// Configuration is the app's only job (progress.md Phase 7), so its main window is
+// the settings window itself — not a separate `Settings` scene. On macOS the
+// extension is only discovered when this app lives in /Applications (or
+// ~/Applications), or when FileProvider testing mode is enabled — see Task 5.1.
 @main
 struct OwnCloudFileProviderApp: App {
+    @StateObject private var model = SettingsModel()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            SettingsWindow(model: model)
+                // Task 7.9: the UI extension opens the app here on a re-auth error.
+                .onOpenURL { model.handleLaunch($0) }
         }
-    }
-}
+        .windowResizability(.contentSize)
 
-struct ContentView: View {
-    var body: some View {
-        VStack(spacing: 8) {
-            Text("ownCloud File Provider")
-                .font(.title2)
-            Text("Core \(OwnCloudCore.version)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            #if DEBUG
-            Divider()
-                .padding(.vertical, 8)
-            // Local end-to-end testing stand-in for the not-yet-built sign-in and
-            // domain registration (Task 6.0 spike); compiled only in DEBUG.
+        #if DEBUG
+        // Local end-to-end testing stand-in for the sign-in and domain registration
+        // (Task 6.0 spike); compiled only in DEBUG, kept out of the shipping window.
+        Window("Dev Harness", id: "dev-harness") {
             DevHarnessView()
-            #endif
         }
-        .padding(40)
+        #endif
     }
 }

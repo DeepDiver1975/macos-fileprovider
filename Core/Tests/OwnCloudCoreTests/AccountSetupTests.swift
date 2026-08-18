@@ -47,19 +47,19 @@ final class AccountSetupTests: XCTestCase {
 
     // MARK: - Account descriptor / domain identifier
 
-    func testAccountDescriptorBuildsStableDomainIdentifier() {
+    func testAccountDescriptorBuildsStableAccountIdentifier() {
         let account = AccountDescriptor(
             backend: .ocis,
             serverURL: URL(string: "https://ocis.test")!,
             username: "einstein"
         )
-        // Domain identifier is stable across launches for the same account. The
+        // Account identifier is stable across launches for the same account. The
         // server URL is percent-encoded so the identifier carries no '/' or ':'.
-        XCTAssertEqual(account.domainIdentifier, "ocis|https%3A%2F%2Focis.test|einstein")
+        XCTAssertEqual(account.accountIdentifier, "ocis|https%3A%2F%2Focis.test|einstein")
         XCTAssertEqual(account.displayName, "einstein@ocis.test")
     }
 
-    func testDomainIdentifierContainsNoForbiddenCharacters() {
+    func testAccountIdentifierContainsNoForbiddenCharacters() {
         // NSFileProviderDomain forbids '/' and ':' in the identifier
         // (NSFileProviderDomain.h). A raw server URL always contains both, so the
         // identifier must encode them away or add(domain:) fails with EINVAL.
@@ -68,11 +68,11 @@ final class AccountSetupTests: XCTestCase {
             serverURL: URL(string: "http://localhost:8080")!,
             username: "admin"
         )
-        let identifier = account.domainIdentifier
+        let identifier = account.accountIdentifier
         XCTAssertFalse(identifier.contains("/"), "identifier must not contain '/': \(identifier)")
         XCTAssertFalse(identifier.contains(":"), "identifier must not contain ':': \(identifier)")
         // And it still round-trips back to the same account.
-        XCTAssertEqual(AccountDescriptor(domainIdentifier: identifier), account)
+        XCTAssertEqual(AccountDescriptor(accountIdentifier: identifier), account)
     }
 
     func testAccountDescriptorDisplayNameUsesHost() {
@@ -84,7 +84,7 @@ final class AccountSetupTests: XCTestCase {
         XCTAssertEqual(account.displayName, "admin@cloud.example.org")
     }
 
-    func testAccountDescriptorRoundTripsThroughItsDomainIdentifier() {
+    func testAccountDescriptorRoundTripsThroughItsAccountIdentifier() {
         // The extension is handed only an NSFileProviderDomain (carrying the
         // identifier); it must reconstruct the account to build a backend source.
         let account = AccountDescriptor(
@@ -92,11 +92,11 @@ final class AccountSetupTests: XCTestCase {
             serverURL: URL(string: "https://ocis.test")!,
             username: "einstein"
         )
-        let restored = AccountDescriptor(domainIdentifier: account.domainIdentifier)
+        let restored = AccountDescriptor(accountIdentifier: account.accountIdentifier)
         XCTAssertEqual(restored, account)
     }
 
-    func testDomainIdentifierRoundTripSurvivesPipeInUsername() {
+    func testAccountIdentifierRoundTripSurvivesPipeInUsername() {
         // Only the first two separators are structural — a '|' inside the username
         // must not corrupt the round trip.
         let account = AccountDescriptor(
@@ -104,12 +104,12 @@ final class AccountSetupTests: XCTestCase {
             serverURL: URL(string: "https://cloud.example.org/owncloud")!,
             username: "od|d"
         )
-        XCTAssertEqual(AccountDescriptor(domainIdentifier: account.domainIdentifier), account)
+        XCTAssertEqual(AccountDescriptor(accountIdentifier: account.accountIdentifier), account)
     }
 
-    func testMalformedDomainIdentifierReturnsNil() {
-        XCTAssertNil(AccountDescriptor(domainIdentifier: "not-a-valid-identifier"))
-        XCTAssertNil(AccountDescriptor(domainIdentifier: "bogusbackend|https://x.test|u"))
+    func testMalformedAccountIdentifierReturnsNil() {
+        XCTAssertNil(AccountDescriptor(accountIdentifier: "not-a-valid-identifier"))
+        XCTAssertNil(AccountDescriptor(accountIdentifier: "bogusbackend|https://x.test|u"))
     }
 
     // MARK: - Removal mode mapping

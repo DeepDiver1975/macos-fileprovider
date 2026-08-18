@@ -33,6 +33,9 @@ enum DevHarnessConfig {
         username: "admin"
     )
     static let password = "admin"
+
+    /// Classic is a single sync root over its files root (no drive id, Task 7.1).
+    static let syncRoot = SyncRoot(account: account, driveID: nil)!
 }
 
 @MainActor
@@ -57,8 +60,9 @@ final class DevHarnessModel: ObservableObject {
 
     /// Register the domain the extension serves.
     func addDomain() {
-        let identifier = DevHarnessConfig.account.domainIdentifier
-        let domain = NSFileProviderDomain(account: DevHarnessConfig.account)
+        let identifier = DevHarnessConfig.syncRoot.domainIdentifier
+        let domain = NSFileProviderDomain(syncRoot: DevHarnessConfig.syncRoot,
+                                          displayName: DevHarnessConfig.account.displayName)
         NSLog("[DevHarness] add(domain:) identifier=%@ rawIdentifier=%@ displayName=%@",
               identifier, domain.identifier.rawValue, domain.displayName)
         NSFileProviderManager.add(domain) { [weak self] error in
@@ -76,7 +80,8 @@ final class DevHarnessModel: ObservableObject {
 
     /// Remove the domain and keep downloaded data, so the spike can be re-run.
     func removeDomain() {
-        let domain = NSFileProviderDomain(account: DevHarnessConfig.account)
+        let domain = NSFileProviderDomain(syncRoot: DevHarnessConfig.syncRoot,
+                                          displayName: DevHarnessConfig.account.displayName)
         // The completion hands back the URL where preserved data was moved (unused
         // here) plus any error.
         NSFileProviderManager.remove(domain, mode: DomainRemovalChoice.default.removalMode) { [weak self] _, error in

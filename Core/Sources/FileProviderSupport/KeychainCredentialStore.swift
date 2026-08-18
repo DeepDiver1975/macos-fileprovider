@@ -16,8 +16,9 @@ public protocol KeychainBackend: AnyObject {
 /// The concrete ``CredentialStore`` shared by the containing app's sign-in flow
 /// and the File Provider extension via the Keychain access group (progress.md
 /// Task 1.3 / 2.5). One generic-password item per account, addressed by the
-/// account's stable ``AccountDescriptor/domainIdentifier`` so both processes
-/// resolve the same credentials, with the payload serialized by
+/// account's stable ``AccountDescriptor/accountIdentifier`` so both processes
+/// resolve the same credentials — and so all N per-space domains of one account
+/// share a single credential item (Task 7.1) — with the payload serialized by
 /// ``CredentialCoder``.
 ///
 /// The `SecItem` calls need the shared-keychain entitlement and a signed host, so
@@ -44,7 +45,7 @@ public final class KeychainCredentialStore: CredentialStore {
         accessGroup: String?,
         backend: KeychainBackend = SecItemKeychainBackend()
     ) {
-        self.account = account.domainIdentifier
+        self.account = account.accountIdentifier
         self.accessGroup = accessGroup
         self.backend = backend
     }

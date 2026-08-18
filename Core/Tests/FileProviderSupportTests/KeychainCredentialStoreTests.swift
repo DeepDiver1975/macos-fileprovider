@@ -60,7 +60,7 @@ final class KeychainCredentialStoreTests: XCTestCase {
         // the shared access group, so the extension resolves the same item.
         let key = try? XCTUnwrap(backend.items.keys.first)
         XCTAssertEqual(backend.items.count, 1)
-        XCTAssertEqual(key?.account, account.domainIdentifier)
+        XCTAssertEqual(key?.account, account.accountIdentifier)
         XCTAssertEqual(key?.accessGroup, "grp")
     }
 
@@ -90,7 +90,7 @@ final class KeychainCredentialStoreTests: XCTestCase {
         let store = KeychainCredentialStore(account: account, accessGroup: "grp", backend: backend)
         // Simulate a stored blob that isn't a valid credential payload.
         backend.saveData(Data("garbage".utf8), service: KeychainCredentialStore.service,
-                         account: account.domainIdentifier, accessGroup: "grp")
+                         account: account.accountIdentifier, accessGroup: "grp")
 
         XCTAssertNil(store.load())
     }

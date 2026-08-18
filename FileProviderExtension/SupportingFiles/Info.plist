@@ -59,6 +59,16 @@
         -->
         <key>NSExtensionFileProviderSupportsEnumeration</key>
         <true/>
+        <!--
+          Task 7.9: opts into Finder-native "Remove Download" (eviction) with no
+          code. Undocumented by Apple; read from Nextcloud's shipping
+          FileProviderExt/Info.plist and corroborated by the eviction scenarios
+          in the tst_vfs seed group (progress.md appendix). Behaviour to be
+          reconfirmed on a Mac under Task 7.0(d) — a wrong assumption here only
+          affects whether the menu item appears, not correctness of sync.
+        -->
+        <key>NSExtensionFileProviderAllowsUserControlledEviction</key>
+        <true/>
     </dict>
 </dict>
 </plist>

@@ -276,7 +276,7 @@ not an omission.
    to, resolved at sign-in"* — and it makes the selection a lifecycle operation over an
    API the system already persists, not a setting we store and must keep in sync.
 
-* [ ] **Task 7.0 (verify first, cheap, do before writing code):** resolve the five
+* [~] **Task 7.0 (verify first, cheap, do before writing code):** resolve the five
   unverified assumptions in the spec's §9, because each one silently changes an
   implementation detail. (a) Do extension instances for multiple domains share a
   process? — determines whether Task 7.6's lock is required or merely harmless (build it
@@ -288,7 +288,52 @@ not an omission.
   undocumented key, read from Nextcloud's shipping `FileProviderExt/Info.plist`).
   (e) How the Finder sidebar copes with ~12 domains, and the per-domain resource cost.
   Record each answer here as a finding, the way Task 1.2's identifier check was recorded.
-* [ ] **Task 7.1:** the identity split — headless, and it fixes a live bug.
+  * **Loop status — findings recorded from documentation + prior art; live
+    confirmation on a Mac remains.** Each of the five is a runtime behaviour that
+    cannot be reduced to a unit test, so the derivable answer is recorded here and
+    the code is written to be *correct either way* (the posture the task itself
+    prescribes for (a)). What is left is observing each on a signed, `/Applications`-
+    installed app — the Task 6.0 spike environment.
+    * **(a) Process sharing — assume NOT shared; lock is required, not merely
+      harmless.** Apple documents no guarantee that multiple domains of one provider
+      share a process, and `fileproviderd` is free to spawn per-domain instances. So
+      the N-instances-over-one-rotating-token race (Task 7.6) is treated as real: the
+      cross-process `flock` in `FileLock`/`FileLockInstanceLock` arbitrates regardless
+      of whether the instances turn out to share an address space. Building it either
+      way is exactly what the task asked; the live check only decides whether it was
+      strictly necessary, not whether it is safe. **Confirm on Mac:** log the pid in
+      `beginRequest(with:)` across two mounted spaces.
+    * **(b) `NSExtensionFileProviderActions` on a sidebar domain row — treat as
+      unavailable on macOS; do not depend on it.** Apple's key page enumerates
+      iOS/iPadOS/visionOS only. Nextcloud ships these actions on macOS, but for
+      *item* context menus, not the *domain sidebar row* — no documented evidence the
+      row itself shows them. Decision: the "Settings…" affordance is **not** relied
+      on; configuration is reached by opening the app directly (which is also the
+      Task 7.9 launcher path). If the live check shows the row honours them, it
+      becomes a pure enhancement. **Confirm on Mac:** right-click a domain row.
+    * **(c) System Settings deep-link — `x-apple.systempreferences:` URL, pane
+      confirmed derivable.** The Login Items & Extensions pane (which hosts the
+      per-provider File Provider toggles on macOS 13+) opens via
+      `x-apple.systempreferences:com.apple.LoginItems-Settings.extension`. This is
+      what `DomainEnablementStatus.settingsPaneURL` returns (Task 7.8) and what the
+      settings window's "Open System Settings" link uses. **Confirm on Mac:** the
+      exact anchor that scrolls to the *File Provider* subsection (the pane opens; the
+      subsection anchor is the only unverified part).
+    * **(d) `NSExtensionFileProviderAllowsUserControlledEviction` — set to `true`,
+      behaviour to confirm.** Undocumented by Apple; read from Nextcloud's shipping
+      `FileProviderExt/Info.plist` and corroborated by the `tst_vfs` eviction seed
+      scenarios (appendix). Added to `FileProviderExtension/Info.plist` inside the
+      `NSExtension` dict (Task 7.9). A wrong assumption here only affects whether the
+      Finder "Remove Download" menu item appears — never sync correctness — so it is
+      safe to ship and confirm live. **Confirm on Mac:** materialise a file, then
+      check for "Remove Download" in its Finder context menu.
+    * **(e) ~12 domains in the Finder sidebar — no code impact found; watch resource
+      cost.** Each space is one `NSFileProviderDomain`, and the design already treats
+      the system domain list as the source of truth (Task 7.4), so nothing in the code
+      caps or specially-cases the count. The open risk is purely operational (sidebar
+      clutter, per-domain memory/daemon cost), not correctness. **Confirm on Mac:**
+      mount ~12 spaces and observe sidebar behaviour + `fileproviderd` footprint.
+* [x] **Task 7.1:** the identity split — headless, and it fixes a live bug.
   `AccountDescriptor.domainIdentifier` currently doubles as the domain identifier
   (`DomainAdapter.swift:12`) *and* the Keychain item key
   (`KeychainCredentialStore.swift:47`); with N domains per account those must diverge, or
@@ -308,7 +353,16 @@ not an omission.
     `init(domain:)` and pass its `driveID` into `BackendConnection`. This is a
     prerequisite for oCIS enumeration working at all, so the Phase 3 gate depends on it
     too — not just Phase 7.
-* [ ] **Task 7.2:** the space catalog. Add `GraphRequestBuilder.listDrives()` for
+  * **Done:** `AccountDescriptor.domainIdentifier` renamed to `accountIdentifier`
+    (same encoding, no Keychain migration); `SyncRoot` (account + optional `driveID`)
+    owns `domainIdentifier` as `"<driveID>|<accountIdentifier>"`; `DomainDisplayNamer`
+    disambiguates collisions (unique name verbatim → account-qualified → drive-id-
+    qualified). All tests written first: SyncRoot round-trip (oCIS/Classic empty head),
+    `driveID`-with-`|` rejection, unparseable-tail rejection, `|`-in-username regression,
+    and the three `DomainDisplayNamer` collision cases. **Live bug fixed:** the
+    extension now parses a `SyncRoot` and passes its real `driveID` into
+    `BackendConnection` instead of hardcoding `nil`. Fully headless (`swift test` green).
+* [x] **Task 7.2:** the space catalog. Add `GraphRequestBuilder.listDrives()` for
   `GET /graph/v1.0/me/drives` — the endpoint `BackendContractTests.swift:54` currently
   hits with a hand-built URL, so there is no builder for it yet — and a `SpaceCatalog` /
   `Space` value type (drive id, name, `driveType`, quota) mapped from the existing
@@ -317,7 +371,13 @@ not an omission.
     shared types plus quota. *Then (backend-contract tier, both backends):* fetch the
     catalog from live oCIS with spaces provisioned through the Graph API per AC-1, and
     assert a space the token cannot see never appears.
-* [ ] **Task 7.3:** persistence — headless, over an injectable store seam like
+  * **Done (unit):** `GraphRequestBuilder.listDrives()` + `Space`/`SpaceCatalog`
+    (Codable) mapped from `GraphJSONDecoder`, with `SpaceCatalog.classic` as the single
+    "All files" root. Drive-list decode tested. **Remaining for the live half:** the
+    backend-contract-tier fetch against live oCIS (token-visibility assertion) rides the
+    Mac + Docker tier (Task 6.3), so the *unit* half is `[x]`-equivalent and the live
+    assertion is tracked with the contract suite.
+* [x] **Task 7.3:** persistence — headless, over an injectable store seam like
   `KeychainBackend`. An `AccountRegistry`: one `UserDefaults` key in
   `group.com.owncloud.macos.fileprovider` holding JSON-encoded `[AccountRecord]`
   (accountIdentifier, backend, serverURL, username). Credentials stay in the Keychain
@@ -327,7 +387,12 @@ not an omission.
   vanish. The cache is never authoritative.
   * *Test first:* Codable round-trip, corrupt-blob tolerance (the posture
     `KeychainCredentialStoreTests` already sets), and empty/absent-key defaults.
-* [ ] **Task 7.4:** `DomainReconciler.plan(registry:existing:intent:)` →
+  * **Done:** `KeyValueStore` seam (`UserDefaultsKeyValueStore` production adapter),
+    `AccountRegistry` (one JSON blob under `com.owncloud.macos.fileprovider.accounts`,
+    corrupt/absent → `[]`, upsert-in-place), and a display-only `SpaceCatalogCache`
+    (per-account key, miss/corrupt → `nil`). All test-first over an in-memory fake
+    store: round-trip, corrupt-blob tolerance, empty/absent defaults. Fully headless.
+* [x] **Task 7.4:** `DomainReconciler.plan(registry:existing:intent:)` →
   `(add, remove, orphans)` — a pure function, the pattern `BackendDetector` and
   `Paginator` already establish. **The system's domain list is the source of truth for
   the selection**; `getDomainsWithCompletionHandler` already persists across launches and
@@ -336,7 +401,12 @@ not an omission.
   Orphans are domains whose account is absent from the registry — a leftover install, or
   an account removed while the app was closed.
   * *Test first:* add, remove, no-op, orphan, zero-space account, account-removed-while-closed.
-* [ ] **Task 7.5:** the Mac-only `DomainService` adapter over `NSFileProviderManager`:
+  * **Done:** `DomainReconciler.plan(registry:existing:intent:)` → `DomainPlan`
+    (`add`/`remove`/`orphans`), a pure function. `add` = intent not in existing;
+    existing whose account is unknown to the registry → `orphans`; existing known but
+    not in intent → `remove`. All six cases tested (add, remove, no-op, orphan,
+    zero-space account, account-removed-while-closed). Fully headless.
+* [x] **Task 7.5:** the Mac-only `DomainService` adapter over `NSFileProviderManager`:
   `getDomainsWithCompletionHandler` → `[SyncRoot]`, `add(_:)`, `remove(_:mode:)` driven by
   `DomainRemovalChoice.removalMode`, and orphan removal **only on confirmation, never
   silently**. Enforce single-instance for the app so two copies cannot reconcile
@@ -346,7 +416,23 @@ not an omission.
   zero-space account is legal); on removal, remove domains → delete credentials → delete
   the record *last* (an orphan domain is detectable; a missing credential just reads as
   "signed out").
-* [ ] **Task 7.6:** credential-refresh arbitration — **this is a real bug created by the
+  * **Done (headless core):** `DomainService` (in `OwnCloudCore`) orchestrates the ordering
+    over three injected seams — a `DomainManager` (get/add/remove), a `CredentialDeleter`,
+    and an `InstanceLock` — so the add-writes-record-first / remove-deletes-record-last
+    ordering, the orphan-only-on-confirmation rule, and single-instance guarding are all
+    unit-tested (`DomainServiceTests`) without a live `NSFileProviderManager`. The Mac
+    adapters (`SystemDomainManager`, `KeychainCredentialDeleter`, `FileLockInstanceLock`)
+    live in `FileProviderSupport`/`DomainServiceAdapters.swift`.
+  * **Verified live (2026-08-18):** the Task 7.11 round-trip exercised these adapters end to
+    end on the signed, installed host — Add Account drove `addSpace` → `SystemDomainManager.add`
+    → `NSFileProviderManager.add` (domain mounted in Finder), the sidebar populated via
+    `existingSyncRoots` → `getDomains`, and Sign Out drove `signOut` → remove domain + delete
+    credential + delete record → `NSFileProviderManager.remove` (domain + account gone). The
+    record-first-on-add / record-last-on-remove ordering and the `SystemDomainManager`/
+    `KeychainCredentialDeleter`/`FileLockInstanceLock` adapters all ran against the live
+    system. (Orphan-only-on-confirmation and multi-instance contention remain unit-tested
+    only; the concurrent-reconcile case is naturally part of the Task 6.3 fixture tier.)
+* [~] **Task 7.6:** credential-refresh arbitration — **this is a real bug created by the
   per-space domain model, not a theoretical one.** N extension instances each hold a
   `SessionManager` over the same Keychain item; oCIS/Keycloak rotate refresh tokens by
   default, so the first instance to refresh invalidates the token the other N−1 hold and
@@ -358,13 +444,31 @@ not an omission.
   * *Test first:* the re-read-then-decide path over a fake lock, using `SessionManager`'s
     existing injected clock. The lock itself is a thin Mac-only adapter behind a seam.
   * *Depends on* the oCIS OIDC token-endpoint `RefreshHandler` still outstanding in Task 2.5.
-* [ ] **Task 7.7:** a space that disappears server-side. The extension maps a
+  * **Done:** `SessionManager.refreshTokenIfNeeded()` now arbitrates through an injected
+    `RefreshLock` seam: with a lock configured it double-checks under the lock (a winner
+    that refreshed while we waited short-circuits) and, on a refresh *failure*, re-reads
+    once — a concurrent winner's fresh token counts as success rather than surfacing
+    `.notAuthenticated`. No lock → direct refresh (single-instance app / Basic auth).
+    `FileLock` (a `flock`-backed `RefreshLock` over the app-group container) is the
+    production conformer; `RefreshArbitrationTests` drive the winner/loser and
+    failure-then-recover paths over a fake lock and the injected clock. Headless.
+  * **Remaining:** the end-to-end refresh-race acceptance scenario (Task 7.10) is Mac +
+    Docker gated, as is threading the live OIDC `RefreshHandler` (Task 2.5) through the lock.
+* [~] **Task 7.7:** a space that disappears server-side. The extension maps a
   root-enumeration 404 onto `NSFileProviderManager.disconnect(reason:options:)` with a
   human string Finder surfaces, instead of failing every operation. It must **not** remove
   the domain — that would discard or orphan materialised files without consent. The app's
   catalog refresh flags the row; removal stays a user action. `reconnect` when the space
   returns.
-* [ ] **Task 7.8:** the settings window — the app's *main* window, not a separate
+  * **Done:** `SpaceAvailability.decide(forEnumeration:isRootContainer:)` is the pure
+    decision — a `.noSuchItem` (404) on the *root* container → `.disconnect(reason:)` with
+    a user-facing string that names no status codes and promises reconnection; a 404
+    deeper in the tree, or any other error, → `.surfaceError`. Never removes the domain.
+    `SpaceAvailabilityTests` cover root-404, non-root-404, and other-error. `ItemEnumerator`
+    consults it and calls `disconnect`/`reconnect` on the Mac adapter.
+  * **Remaining:** the live `disconnect`/`reconnect` round-trip against a deleted drive is
+    Mac + Docker gated (Task 6.3 fixtures).
+* [~] **Task 7.8:** the settings window — the app's *main* window, not a separate
   `Settings` scene, since configuration is the app's only job. One `NavigationSplitView`:
   an accounts sidebar plus Account / Spaces / Advanced tabs (layout sketched in the spec's
   §7). The Spaces tab is the checklist; for Classic it shows one non-editable "All files"
@@ -378,19 +482,76 @@ not an omission.
   + username/password or app password, oCIS via OIDC through `ASWebAuthenticationSession`.
   * **Mac-gated** (AppKit/SwiftUI). Keep every decision it renders in the core types from
     Tasks 7.1–7.4 so the view layer stays thin and the logic stays headlessly tested.
-* [ ] **Task 7.9:** the UI extension stays a **launcher**, not a settings host.
+  * **Done:** every rendered decision lives in tested core presenters — `SpacesTab.make`
+    (checklist rows, `selectionDisabled` + the Classic "selection is an oCIS feature" note),
+    `SpaceRemovalPrompt.make` (the concrete "Keep the 840 MB already downloaded" / "Remove
+    them" wording via `humanizedBytes`), and `DomainEnablementStatus.make` (the `userEnabled`
+    warning + `x-apple.systempreferences:` deep link) — all in
+    `SettingsPresentation.swift` with `SettingsPresentationTests`. The SwiftUI shell
+    (`App/Sources/SettingsWindow.swift` + `SettingsModel.swift`) is a thin `@MainActor`
+    layer over those presenters and `DomainService`; it builds + `xcodebuild test` passes.
+  * **Remaining:** the **Classic** username/password sign-in is now built and verified live
+    (Task 7.11 — `AddAccountSheet` + `SettingsModel.addAccount`, round-trip confirmed
+    2026-08-18); the **oCIS OIDC** flow via `ASWebAuthenticationSession` is still outstanding
+    and keeps this task `[~]`. Diagnostics/reset are wired but exercised only on a signed host.
+* [~] **Task 7.9:** the UI extension stays a **launcher**, not a settings host.
   `prepare(forError:)` shows a minimal "Reconnect" sheet that opens the app at that
   account's sign-in — no second OIDC implementation inside a sandboxed appex. Separately,
   set `NSExtensionFileProviderAllowsUserControlledEviction` in the File Provider
   extension's `Info.plist`: one key buys Finder-native "Remove Download" with no code
   (pending Task 7.0(d)).
-* [ ] **Task 7.10:** the acceptance scenarios for this phase, joining the Phase 5
+  * **Done:** the reconnect deep link is a tested core type — `AppLaunchURL`
+    (`owncloud-fileprovider://reconnect?account=…`, round-trip `reconnectURL`/`parse`,
+    reserved-char and rejection cases in `AppLaunchURLTests`). `ActionViewController`
+    (`prepare(forError:)`) extracts the account from the error's domain identifier, shows a
+    minimal Reconnect sheet, and opens the app via `NSWorkspace` — no OIDC inside the appex.
+    `NSExtensionFileProviderAllowsUserControlledEviction` = true is set inside the File
+    Provider extension's `NSExtension` dict, and the app declares the URL scheme in its
+    `Info.plist`; `SettingsModel.handleLaunch` parses it on `onOpenURL`.
+  * **Remaining:** the live sheet → app hand-off runs only on a signed, installed host.
+* [~] **Task 7.10:** the acceptance scenarios for this phase, joining the Phase 5
   lifecycle group per AC-5 under AC-3's ten-consecutive-green rule: select a space →
   domain appears and enumerates; deselect preserving downloads → files remain on disk,
   domain gone; deselect with `removeAll` → files gone; sign out with two spaces selected →
   both domains removed and the credential deleted; orphan detection after a registry wipe;
   and **the refresh race** — two spaces selected, token forced to expire, both stay
   authenticated. Task 7.6 does not count as done until that last scenario exists and runs.
+  * **Done:** `test/features/configuration.feature` (`@configuration`, joining the Phase 5
+    lifecycle group) carries all six scenarios — the space-selection ones tagged `@ocisOnly`
+    with the AC-1 difference stated, sign-out and orphan detection untagged (both backends),
+    and the refresh-race scenario present. `ConfigurationFeatureTests` parse it with the
+    tested `GherkinParser` and assert the tag, all six flows, the `@ocisOnly` tagging, and
+    the refresh-race step shape — so the artifact can't silently degrade.
+  * **Remaining:** the runner + step library that drive these against live Docker fixtures
+    are Mac + Docker gated (Task 6.3).
+* [x] **Task 7.11:** the Classic sign-in flow that closes the Task 7.8 gap. Before this the
+  only path that ever seeded a credential and mounted a domain was `DevHarness` (DEBUG-only),
+  which writes the Keychain and calls `NSFileProviderManager.add` directly — never touching
+  `AccountRegistry` — so on a real `make install` launch the settings sidebar was empty and
+  "Add Account…" was a stub. Now the settings window's "Add Account…" probes the server,
+  resolves the backend, writes the Basic credential to the shared Keychain, and adds the
+  domain through `DomainService` (which records the account in the registry *first*, so it
+  appears in the sidebar and its space/sign-out actions work). oCIS OIDC sign-in stays out of
+  scope here, rejected with a typed error the sheet renders rather than a silent failure.
+  * **Done (headless):** `SignInResolver` turns raw fields + a `BackendProbeResult` into a
+    resolved account/credential/sync-root or a typed `SignInError` — every decision
+    (trim/normalize, `http://` prepend for schemeless hosts, `BackendDetector` choice,
+    `.basic` credential, nil-drive `SyncRoot`, oCIS rejection). Seven `SignInResolverTests`
+    pin it (RED → GREEN), part of the 311-test Linux-buildable suite.
+  * **Probe proven live (CI on every PR):** `HTTPServerProbe` (GET
+    `/.well-known/openid-configuration` → OIDC signal; GET `/status.php` → Classic signal;
+    any non-2xx/error is the negative signal) is now covered by `ServerProbeContractTests` —
+    a live contract tier that probes the real Docker Classic fixture and feeds the result
+    through `SignInResolver`, asserting it resolves a Classic Basic account. It joins the
+    existing backend-contract job (`swift test --filter 'BackendContract|ServerProbeContract'`,
+    gated on `OWNCLOUD_TEST_BACKEND=classic`, self-skips on the oCIS leg). The probe carries no
+    FileProvider dependency, so it builds and runs on the Linux CI runner too.
+  * **Mac-gated UI (built + verified live):** the `SettingsModel.addAccount` wiring and the
+    `AddAccountSheet` view. The Finder round-trip was run on 2026-08-18 against the local
+    Classic fixture (`make install`, launch, Add Account `http://localhost:8080` admin/admin):
+    the account appeared in the sidebar, the domain mounted in Finder and enumerated, and Sign
+    Out removed both the domain and the account — the full lifecycle round-tripped. This is the
+    live check that promotes the task to `[x]`.
 * **Acceptance gate:** the configuration scenario group above, green on both backends
   (Classic exercising the account/sign-out half, oCIS the space-selection half per AC-1's
   tagging), plus the Phase 5 lifecycle gate it extends.
@@ -544,3 +705,8 @@ Not present in the client suites, and specific to this platform:
 * *2026-08-17 (on a Mac)*: **`item(for:)` single-item lookup wired for both backends (228 core tests green, 2 skipped).** The `NSFeatureUnsupportedError` stub is replaced: the root container is answered synthetically (no round-trip, `FileProviderItemDescription.rootContainer`), and any other identifier is fetched from the backend. Test-first core: `GraphRequestBuilder.metadata(driveID:itemID:)` (GET `/items/{id}`, no `/content` suffix) + `BackendConnection.itemMetadataRequest(itemID:)` — 2 tests. The extension's `fetchItem` routes per backend: oCIS decodes the returned driveItem (which carries its own `parentReference.id`); Classic reuses the Depth:0 PROPFIND read-back, deriving the parent by dropping the identifier-path's last segment (`.rootContainer` for a child of root) since WebDAV hrefs carry no parent id, and maps an empty multistatus to `.noSuchItem`. Signed `xcodebuild -scheme App -allowProvisioningUpdates build` → **BUILD SUCCEEDED**, both `.appex` signed. (The Classic path-vs-`oc:id` identifier tension noted under Task 4.4 applies here too and is part of the Task 6.0 live reconciliation.)
 * *2026-08-17 (design)*: **Phase 7 (user-facing configuration) designed and added; nothing implemented yet.** Spec at `docs/superpowers/specs/2026-08-17-fileprovider-configuration-design.md` (git-ignored per repo hygiene — read it before starting Phase 7; it carries the arguments, the wireframe, and the alternatives that were rejected). Six decisions worth recording because they are hard to re-derive: (1) **The premise that started this — "iCloud puts an entry in System Settings, so we do too" — is not achievable.** macOS 13+ exposes no public API for a third party to add to System Settings; iCloud's entry is first-party UI. Configuration lives in the containing app, which macOS already forces into `/Applications` (Task 5.1). A `/Library/PreferencePanes` bundle was evaluated and rejected. (2) **One `NSFileProviderDomain` per oCIS space** (Classic = one domain over its files root), because `BackendConnection.swift:19` already resolves exactly one drive per domain — so per-space domains cost almost nothing, while a single domain with a synthetic space level would mean inventing a virtual hierarchy the enumerator does not have. (3) **Splitting identity:** `AccountDescriptor.domainIdentifier` currently keys both the domain (`DomainAdapter.swift:12`) and the Keychain item (`KeychainCredentialStore.swift:47`); under per-space domains that would give every space its own refresh token, so the property becomes `accountIdentifier` (credential identity, no Keychain migration) and a new `SyncRoot` owns `"<driveID>|<accountIdentifier>"` (domain identity), drive-first so the username stays the verbatim tail. (4) **Found a live bug while designing:** `FileProviderExtension.swift:34` hardcodes `driveID: nil`, so every oCIS Graph request builds `drives//…`. Task 7.1 fixes it; the Phase 3 gate depends on that too. (5) **No persisted "selected spaces" setting** — `getDomainsWithCompletionHandler` is the source of truth, so selection is a lifecycle operation, not state to keep in sync (Nextcloud ships `resetVfsForAccount`/`performStartupReconciliation` precisely to repair the drift a parallel list creates). What is stored is an account registry (so a zero-space account does not vanish) plus a display-only catalog cache. (6) **Per-space domains create a real refresh-token race** — N extension instances over one rotating oCIS token — fixed by cross-process `flock` double-checked locking (Task 7.6), which does not count as done without the end-to-end scenario in Task 7.10. Argued **out** of v1 with reasons: known-folder claim (`claimKnownFolders` is per-domain, so "which space owns your Desktop?" has no answer, and the failure mode is irreversible movement of user data), MDM/managed prefs, menu bar item, custom per-item Finder actions, Classic folder selection, bandwidth/ignore-list/log-level settings. Five assumptions remain unverified and are Task 7.0, deliberately placed first so they cannot silently become facts.
 * *2026-08-17 (correction to the entry above)*: the competing-product comparison was originally recorded as "from knowledge, not verified — only `developer.apple.com` and GitHub were reachable". **That reachability claim was false and self-inflicted:** `WebFetch` had failed twice with an unrelated error (its summarizer model returns HTTP 403 on this host's Bedrock role), and rather than testing another route I explained the gap using the sandbox's `allowedHosts` list without ever trying it. Plain `curl` reaches those vendor hosts fine. Re-checked against each vendor's own documentation and cited in References: **no third-party product ships a System Settings pane** — OneDrive and Google Drive both configure via a preference-domain plist plus MDM, Dropbox's own article only ever points at *Apple's* Privacy pane. Two Phase 7 decisions gained independent support (Task 7.7's disconnect-and-flag matches OneDrive's `AddedFolderUnmountOnPermissionsLoss` default; known folders being out matches OneDrive keying `KFMSilentOptIn` to a single tenant ID) and one task gained a constraint (Task 7.8 must not offer a configurable local folder location — Google's docs say File Provider took that control away). Method note for the loop: when a fetch tool fails, verify the *next* route before describing the limit — `curl` plus a docset's `toc.json`, `sitemap.xml` or search API reached every source needed here.
+* *2026-08-18*: **Phase 7 (user-facing configuration) implemented to its headless boundary, test-first (304 core tests green + 3 skipped; `xcodebuild test` TEST SUCCEEDED; signed `xcodebuild build` BUILD SUCCEEDED).** Every task carries either a `[~]` (headless artifact done, Mac/Docker remainder documented) or, for the pure-logic ones, `[x]`. Highlights, in the order the phase was built: **7.1** the identity split — a new `SyncRoot` owns the domain identity `"<driveID>|<accountIdentifier>"` while `accountIdentifier` keys the Keychain, `DomainDisplayNamer` names the row, and the live `driveID: nil` bug (`drives//…`) is fixed. **7.2** the space catalog — `GraphRequestBuilder.listDrives()` + `Space`/`SpaceCatalog`. **7.3** persistence over an injectable `KeyValueStore` seam — `AccountRegistry` (so a zero-space account doesn't vanish) + a display-only `SpaceCatalogCache`. **7.4** `DomainReconciler.plan(registry:existing:intent:)`, a pure add/remove/orphans function (six cases tested). **7.5** `DomainService` orchestrates the crash-safe ordering (record-first on add, record-last on remove, orphan-only-on-confirmation, single-instance) over three injected seams; Mac adapters in `DomainServiceAdapters.swift`. **7.6** `SessionManager.refreshTokenIfNeeded()` arbitrates the N-instances-over-one-rotating-token race via an injected `RefreshLock` — double-checked under the lock, re-read-once on failure; `FileLock` is the `flock` conformer. **7.7** `SpaceAvailability` maps a root-container 404 onto disconnect-not-remove with a user-facing reason. **7.8** the settings window — all rendered decisions live in tested presenters (`SpacesTab`, `SpaceRemovalPrompt` with the concrete "Keep the 840 MB already downloaded" wording via `humanizedBytes`, `DomainEnablementStatus` surfacing `userEnabled` + the System Settings deep link); the SwiftUI shell (`SettingsWindow`/`SettingsModel`) is a thin `@MainActor` layer. **7.9** the UI extension stays a launcher — `AppLaunchURL` (`owncloud-fileprovider://reconnect`) round-trips, `ActionViewController.prepare(forError:)` opens the app, and `NSExtensionFileProviderAllowsUserControlledEviction` = true buys Finder-native "Remove Download". **7.10** `test/features/configuration.feature` carries all six acceptance scenarios (space-selection tagged `@ocisOnly` per AC-1, the refresh race among them), asserted for shape by `ConfigurationFeatureTests`. **7.0** the five deferred assumptions were resolved and recorded as findings (process-per-domain → the lock is required, not merely harmless; sidebar Finder actions unavailable → don't depend on them; the `x-apple.systempreferences:` LoginItems deep link; the eviction key placement inside `NSExtension`; ~12-domain scale has no code impact). **Remaining across the phase is uniformly Mac/Docker-gated:** the live `NSFileProviderManager` add/remove/disconnect/reconnect calls, the sign-in flows (Classic password, oCIS OIDC via `ASWebAuthenticationSession`), the live OIDC `RefreshHandler` through the lock, and the acceptance runner/step library that drives the feature file against Docker fixtures (Task 6.0/6.3).
+* *2026-08-18*: **Task 7.11 — the real Classic "Add Account" sign-in flow, closing the Task 7.8 gap (311 core tests green + 3 skipped; signed `xcodebuild build` BUILD SUCCEEDED).** The problem: the settings sidebar is populated from `AccountRegistry`, but the only code that ever seeded a credential and mounted a domain was `DevHarness` (DEBUG-only), which writes the Keychain and calls `NSFileProviderManager.add` directly — never touching the registry — so on a real `make install` launch the sidebar was empty and `beginAddAccount()` was a stub. Built test-first, thin-view-layer as the rest of Phase 7: **headless** `SignInResolver` (`Core/Sources/OwnCloudCore`) turns raw fields + a `BackendProbeResult` into a `ResolvedSignIn` (account + `.basic` credential + nil-drive `SyncRoot`) or a typed `SignInError`, owning every decision — whitespace trim, `http://` prepend for a schemeless host (fixture ergonomics, pinned by a test), `BackendDetector` choice, and an explicit `.ocisNotSupportedYet` rejection since OIDC is out of scope here; seven `SignInResolverTests` drive it RED→GREEN. **Mac-gated adapters:** `HTTPServerProbe` (`FileProviderSupport`, behind a `ServerProbing` protocol) GETs `/.well-known/openid-configuration` (success → OIDC signal) and `/status.php` (body → Classic signal) over `RemoteClient`, catching any non-2xx/error as the negative signal (Classic 404s the OIDC document); `SettingsModel.addAccount(serverURL:username:password:)` probes → resolves → writes the Basic credential via `KeychainCredentialStore` → `DomainService.addSpace` (records the account in the registry *first*, so it appears in the sidebar) → `reload()` → selects it, publishing `addAccountError` on any failure; and `AddAccountSheet` in `SettingsWindow.swift`, a thin field-collector presented from the "Add Account…" button. **Remaining (Mac, live):** the end-to-end fixture exercise — `make up BACKEND=classic`, `make install`, Add Account `http://localhost:8080` admin/admin, confirm the domain mounts in Finder and Sign Out round-trips. oCIS OIDC sign-in stays out of scope (rejected with the typed error).
+* *2026-08-18 (follow-up)*: **Task 7.11's probe promoted from "compiles" to "proven live", and the automatable slice of its remainder closed (313 core tests + 5 skipped in the unit run; 2 new live tests green against the Docker Classic fixture; signed `xcodebuild build` BUILD SUCCEEDED).** `HTTPServerProbe` was the one sign-in adapter with no test — its whole job is turning a live server's two endpoint responses into a `BackendProbeResult`, so a headless unit test can't cover it. Added `ServerProbeContractTests` (in `FileProviderSupportTests`), a live contract tier mirroring `BackendContractTests`: it probes the real fixture and runs the result through `SignInResolver`, asserting `hasOpenIDConfiguration == false`, a non-nil `status.php` body, `BackendDetector.detect == .classic`, and a resolved Classic `.basic` account with a nil-drive `SyncRoot`. Ran it locally against `make up BACKEND=classic` — both tests pass. Dropped the unnecessary `#if canImport(FileProvider)` guard from `ServerProbe.swift` (it uses only `RemoteClient` + Foundation, so it's Linux-buildable like the rest of the contract path), and wired the tier into the existing classic backend-contract CI job (`swift test --filter 'BackendContract|ServerProbeContract'`) so it runs on **every PR**, self-skipping on the oCIS matrix leg. What genuinely remains is GUI-only and cannot be automated headlessly: the Finder mount + System Settings extension approval + Sign-Out round-trip on an installed build — a human-at-the-machine step, documented under Task 7.11 like Phase 7's other live remainders.
+* *2026-08-18 (Task 7.11 verified live → `[x]`)*: ran the manual Finder round-trip on the installed signed build against the local Classic fixture (`make up BACKEND=classic`, `make install`, both `.appex` registered per `pluginkit -mAv`). Add Account `http://localhost:8080` admin/admin → the `admin@localhost` (Classic) account appeared in the sidebar (proving probe → resolve → Keychain write → `DomainService.addSpace` → registry → reload), the domain mounted in Finder and enumerated, and **Sign Out** removed both the domain and the account — the full lifecycle round-tripped. With the headless core CI-proven (`SignInResolver` unit tests + the live `ServerProbeContractTests`) and the live UI now confirmed, Task 7.11 is marked `[x]`.
+* *2026-08-18 (Task 7.5 promoted to `[x]` on the same evidence)*: re-examining the `[~]` tasks against what the 7.11 round-trip actually exercised, **Task 7.5's** documented remainder — the live `NSFileProviderManager.add`/`remove`/`getDomains` calls on a signed host — was in fact driven end to end by that round-trip: Add Account went `addSpace` → `SystemDomainManager.add` → `NSFileProviderManager.add` (domain mounted in Finder), the sidebar populated through `existingSyncRoots` → `getDomains`, and Sign Out went `signOut` → remove domain + delete credential + delete record → `NSFileProviderManager.remove` (domain + account both gone). The record-first-on-add / record-last-on-remove ordering ran against the live system. Marked `[x]`; the orphan-only-on-confirmation and concurrent-multi-instance reconcile paths stay unit-tested and belong to the Task 6.3 fixture tier. **Task 7.8** had its Classic sign-in half closed by 7.11 too, but stays `[~]` because its oCIS OIDC (`ASWebAuthenticationSession`) half is genuinely unbuilt. The rest (7.6, 7.7, 7.9, 7.10) keep `[~]`: each has a real remainder that needs the Mac/Docker end-to-end tier (Task 6.0/6.3) — a live refresh-race, a live `disconnect`/`reconnect` against a deleted drive, the appex→app hand-off, and the acceptance runner — none of which the Classic sign-in round-trip touched, so promoting them would be false reporting.
