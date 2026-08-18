@@ -26,18 +26,25 @@ final class SettingsModel: ObservableObject {
     @Published var pendingRemoval: SpaceRemovalPrompt?
     private var pendingRemovalRoot: SyncRoot?
 
+    /// The last "Add Account" failure, shown inline in the sign-in sheet. `nil`
+    /// clears the message; a successful sign-in dismisses the sheet instead.
+    @Published var addAccountError: String?
+
     private static let appGroup = "group.com.owncloud.macos.fileprovider"
     private static let keychainAccessGroup = "com.owncloud.macos.fileprovider.shared"
 
     private let registry: AccountRegistry
     private let catalogCache: SpaceCatalogCache
     private let service: DomainService
+    /// The Mac-only server probe used by the sign-in flow (Task 7.11).
+    private let prober: ServerProbing
 
-    init() {
+    init(prober: ServerProbing = HTTPServerProbe()) {
         let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
         let store = UserDefaultsKeyValueStore(defaults: defaults)
         self.registry = AccountRegistry(store: store)
         self.catalogCache = SpaceCatalogCache(store: store)
+        self.prober = prober
         self.service = DomainService(
             registry: registry,
             domainManager: SystemDomainManager(),
@@ -159,9 +166,70 @@ final class SettingsModel: ObservableObject {
         }
     }
 
-    func beginAddAccount() {
-        // Sign-in (Classic username/password, oCIS OIDC via ASWebAuthenticationSession)
-        // is presented from here; the flow itself is the remaining Mac-only UI work.
+    /// The real Classic sign-in flow (Task 7.11). Probes the server, lets the
+    /// tested ``SignInResolver`` decide the backend/credential/sync-root, writes the
+    /// Basic credential to the shared Keychain, then adds the domain through
+    /// ``DomainService`` — which records the account in the registry first, so it
+    /// appears in the sidebar. Any failure is surfaced via ``addAccountError``;
+    /// success leaves it `nil` so the sheet can dismiss.
+    func addAccount(serverURL: String, username: String, password: String) async {
+        addAccountError = nil
+
+        // Probe the normalized URL (same normalization the resolver applies) so the
+        // resolver's backend decision reflects the live server. A string that can't
+        // form a URL yields an empty probe; the resolver then reports it precisely.
+        let probe: BackendProbeResult
+        if let url = Self.normalizedURL(from: serverURL) {
+            probe = await prober.probe(serverURL: url)
+        } else {
+            probe = BackendProbeResult(hasOpenIDConfiguration: false, classicStatusJSON: nil)
+        }
+
+        switch SignInResolver.resolve(serverURL: serverURL, username: username,
+                                      password: password, probe: probe) {
+        case .failure(let error):
+            addAccountError = Self.message(for: error)
+        case .success(let resolved):
+            KeychainCredentialStore(account: resolved.account, accessGroup: Self.keychainAccessGroup)
+                .save(resolved.credentials)
+            do {
+                try await service.addSpace(resolved.syncRoot, displayName: resolved.account.displayName)
+            } catch {
+                addAccountError = "Could not add the account’s file provider domain: "
+                    + error.localizedDescription
+                return
+            }
+            await reload()
+            selectedAccountID = resolved.account.accountIdentifier
+        }
+    }
+
+    /// Normalize a server field the way ``SignInResolver`` does (trim; prepend
+    /// `http://` when schemeless) so the probe hits the same URL the resolver
+    /// validates. Returns `nil` when no URL with a host can be formed.
+    private static func normalizedURL(from serverURL: String) -> URL? {
+        let trimmed = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let withScheme = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
+        guard let url = URL(string: withScheme), url.host != nil else { return nil }
+        return url
+    }
+
+    /// A user-facing sentence for each sign-in failure.
+    private static func message(for error: SignInError) -> String {
+        switch error {
+        case .emptyServerURL:
+            return "Enter the server address."
+        case .emptyUsername:
+            return "Enter your user name."
+        case .invalidServerURL:
+            return "That server address isn’t valid. Include the host, e.g. http://localhost:8080."
+        case .backendNotDetected:
+            return "No ownCloud server answered at that address. Check the address and try again."
+        case .ocisNotSupportedYet:
+            return "That’s an Infinite Scale (oCIS) server. OpenID sign-in isn’t supported here yet — "
+                + "this build signs in to ownCloud Classic only."
+        }
     }
 
     func collectDiagnostics(_ account: AccountDescriptor) {

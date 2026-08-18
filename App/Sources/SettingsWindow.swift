@@ -14,6 +14,7 @@ import FileProviderSupport
 /// arranges them and forwards the chosen `DomainRemovalChoice` back to the service.
 struct SettingsWindow: View {
     @ObservedObject var model: SettingsModel
+    @State private var isAddingAccount = false
 
     var body: some View {
         NavigationSplitView {
@@ -29,7 +30,8 @@ struct SettingsWindow: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 240)
             .safeAreaInset(edge: .bottom) {
                 Button {
-                    model.beginAddAccount()
+                    model.addAccountError = nil
+                    isAddingAccount = true
                 } label: {
                     Label("Add Account…", systemImage: "plus")
                 }
@@ -50,6 +52,75 @@ struct SettingsWindow: View {
         }
         .frame(minWidth: 720, minHeight: 460)
         .task { await model.reload() }
+        .sheet(isPresented: $isAddingAccount) {
+            AddAccountSheet(model: model, isPresented: $isAddingAccount)
+        }
+    }
+}
+
+/// The Classic "Add Account" sign-in sheet (Task 7.11). A thin field-collector:
+/// it gathers the server address, user name and password, then hands them to
+/// `SettingsModel.addAccount`, which routes every decision through the tested
+/// `SignInResolver`. On success the model publishes no error and the sheet
+/// dismisses; on failure the model's `addAccountError` is shown inline.
+private struct AddAccountSheet: View {
+    @ObservedObject var model: SettingsModel
+    @Binding var isPresented: Bool
+
+    @State private var server = ""
+    @State private var username = ""
+    @State private var password = ""
+    @State private var isSigningIn = false
+
+    private var canSubmit: Bool {
+        !isSigningIn
+            && !server.trimmingCharacters(in: .whitespaces).isEmpty
+            && !username.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Add ownCloud Account").font(.headline)
+
+            Form {
+                TextField("Server", text: $server, prompt: Text("http://localhost:8080"))
+                    .textContentType(.URL)
+                    .disableAutocorrection(true)
+                TextField("User Name", text: $username)
+                    .textContentType(.username)
+                SecureField("Password", text: $password)
+                    .textContentType(.password)
+            }
+            .formStyle(.columns)
+
+            if let error = model.addAccountError {
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { isPresented = false }
+                Button("Sign In") { Task { await signIn() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSubmit)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        .overlay {
+            if isSigningIn { ProgressView().controlSize(.large) }
+        }
+    }
+
+    private func signIn() async {
+        isSigningIn = true
+        await model.addAccount(serverURL: server, username: username, password: password)
+        isSigningIn = false
+        // The model clears its error on success; a nil error means we're done.
+        if model.addAccountError == nil { isPresented = false }
     }
 }
 
