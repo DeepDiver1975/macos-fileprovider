@@ -1,4 +1,3 @@
-#if canImport(FileProvider)
 import Foundation
 import OwnCloudCore
 #if canImport(FoundationNetworking)
@@ -54,4 +53,3 @@ public struct HTTPServerProbe: ServerProbing {
         return try? await client.send(request, authorization: nil)
     }
 }
-#endif
