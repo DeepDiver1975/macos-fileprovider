@@ -13,37 +13,47 @@ import FileProviderSupport
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     let domain: NSFileProviderDomain
-    private let account: AccountDescriptor?
+    /// The sync root this domain maps to (account + optional oCIS drive id),
+    /// reconstructed from the domain identifier (Task 7.1).
+    private let syncRoot: SyncRoot?
+    private var account: AccountDescriptor? { syncRoot?.account }
     private let client: RemoteClient
     /// Caches the oCIS drive-id resolution so `me/drives` is looked up once per
-    /// extension instance, not per operation.
+    /// extension instance, not per operation — only used when the domain
+    /// identifier carries no drive id (a legacy domain / defensive fallback).
     private let driveIDCache = DriveIDCache()
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
         let client = RemoteClient.urlSession()
         self.client = client
-        // The domain identifier round-trips the account (backend, server, user).
-        self.account = AccountDescriptor(domainIdentifier: domain.identifier.rawValue)
+        // The domain identifier round-trips the sync root: "<driveID>|<account>".
+        self.syncRoot = SyncRoot(domainIdentifier: domain.identifier.rawValue)
         super.init()
     }
 
-    /// Build the backend connection for this operation. Classic needs no drive id;
-    /// oCIS resolves its personal drive id once (cached) before the connection can
-    /// address items. Credentials come from the shared Keychain access group (Task
-    /// 1.3); with none stored there is no authorization and callers surface
-    /// `.notAuthenticated`.
+    /// Build the backend connection for this operation. Classic needs no drive id.
+    /// For oCIS the drive id comes from the ``SyncRoot`` (one domain per space, so
+    /// it is baked into the identifier, Task 7.1); only a legacy identifier lacking
+    /// a drive head falls back to resolving the personal drive once (cached).
+    /// Credentials come from the shared Keychain access group (Task 1.3); with none
+    /// stored there is no authorization and callers surface `.notAuthenticated`.
     private func makeConnection() async throws -> BackendConnection {
-        guard let account else { throw NSFileProviderError(.notAuthenticated) }
+        guard let syncRoot else { throw NSFileProviderError(.notAuthenticated) }
+        let account = syncRoot.account
         let authorization = FileProviderExtension.authorization(for: account)
         let driveID: String?
         switch account.backend {
         case .classic:
             driveID = nil
         case .ocis:
-            driveID = try await driveIDCache.driveID {
-                let resolver = DriveResolver(serverURL: account.serverURL, client: self.client)
-                return try await resolver.resolvePersonalDriveID(authorization: authorization)
+            if let resolved = syncRoot.driveID {
+                driveID = resolved
+            } else {
+                driveID = try await driveIDCache.driveID {
+                    let resolver = DriveResolver(serverURL: account.serverURL, client: self.client)
+                    return try await resolver.resolvePersonalDriveID(authorization: authorization)
+                }
             }
         }
         return BackendConnection(account: account, client: client, authorization: authorization, driveID: driveID)
