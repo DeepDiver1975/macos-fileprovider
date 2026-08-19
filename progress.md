@@ -540,6 +540,18 @@ not an omission.
     `SettingsPresentation.swift` with `SettingsPresentationTests`. The SwiftUI shell
     (`App/Sources/SettingsWindow.swift` + `SettingsModel.swift`) is a thin `@MainActor`
     layer over those presenters and `DomainService`; it builds + `xcodebuild test` passes.
+  * **Done (2026-08-19, issue #26 / PR #27): account removal is a first-class action here.**
+    The window previously offered only a `Sign Out…` button that confirmed nothing, hid the
+    keep-or-delete choice, and was absent from the sidebar; `AccountRemovalPrompt.make` now
+    supplies every rendered string and drives **three** affordances through one confirmed
+    path — the Account-tab button, a `−` button beside `Add Account…`, and a `Remove
+    Account…` context menu on the sidebar row (acting on the right-clicked row, not the
+    selection). `DomainService.signOut` → `removeAccount`, its crash-safe ordering unchanged.
+    Live-proven on the signed build against the Classic fixture, including the on-disk
+    consequence of both choices: `.preserveDownloadedUserData` leaves the sync root **renamed
+    in place with a timestamp suffix** (same inode, materialized file byte-identical), while
+    `.removeAll` deletes the replica outright. See the dated log entry below for the full
+    evidence and for the 401 misdiagnosis it corrects.
   * **Remaining:** the **Classic** username/password sign-in is built and verified live
     (Task 7.11 — `AddAccountSheet` + `SettingsModel.addAccount`, round-trip confirmed
     2026-08-18). The **oCIS OIDC** flow's *headless core and adapters* are now built and
