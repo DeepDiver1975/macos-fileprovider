@@ -60,6 +60,8 @@ private final class MultiStatusDelegate: NSObject, XMLParserDelegate {
     private var lastModified: Date?
     private var permissions: String?
     private var isFavorite = false
+    private var parentFileID: String?
+    private var serverName: String?
 
     // Character-collection state.
     private var currentValue = ""
@@ -134,6 +136,12 @@ private final class MultiStatusDelegate: NSObject, XMLParserDelegate {
             permissions = text.isEmpty ? nil : text
         case (MultiStatusDelegate.ownCloudNSString, "favorite"):
             isFavorite = (text == "1")
+        case (MultiStatusDelegate.ownCloudNSString, "file-parent"):
+            // oCIS only; Classic omits it. Empty means the server returned the prop
+            // in a 404 propstat (as it does for the space root), so treat it as absent.
+            parentFileID = text.isEmpty ? nil : text
+        case (MultiStatusDelegate.ownCloudNSString, "name"):
+            serverName = text.isEmpty ? nil : text
         case ("DAV:", "response"):
             items.append(makeItem())
             inResponse = false
@@ -162,6 +170,8 @@ private final class MultiStatusDelegate: NSObject, XMLParserDelegate {
         lastModified = nil
         permissions = nil
         isFavorite = false
+        parentFileID = nil
+        serverName = nil
     }
 
     private func makeItem() -> WebDAVItem {
@@ -175,7 +185,9 @@ private final class MultiStatusDelegate: NSObject, XMLParserDelegate {
             contentType: contentType,
             lastModified: lastModified,
             permissions: permissions,
-            isFavorite: isFavorite
+            isFavorite: isFavorite,
+            parentFileID: parentFileID,
+            serverName: serverName
         )
     }
 }
