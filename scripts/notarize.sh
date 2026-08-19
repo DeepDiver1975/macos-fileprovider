@@ -47,6 +47,18 @@ if [[ ! -d "$EXPORTED_APP" ]]; then
     exit 1
 fi
 
+# An unsigned build (make-dmg.sh SIGNING=none, the per-PR smoke tier) cannot be
+# notarized: the notary service rejects anything that is not Developer ID signed. Caught
+# here rather than at Apple, because the rejection arrives minutes later and reads as a
+# notarization failure rather than "you built the wrong thing".
+readonly SIGNING_MODE_FILE="$DIST_DIR/signing-mode.txt"
+if [[ -f "$SIGNING_MODE_FILE" ]] && [[ "$(cat "$SIGNING_MODE_FILE")" == "none" ]]; then
+    echo "notarize: dist/ holds an UNSIGNED build (signing-mode.txt says 'none')." >&2
+    echo "          Notarization requires a Developer ID signature. Rebuild with" >&2
+    echo "          the default SIGNING=developer-id before notarizing." >&2
+    exit 1
+fi
+
 # Taken from make-dmg.sh rather than re-derived from VERSION/DMG_NAME here: this
 # script rebuilds the image in place, and two independent guesses at the same
 # filename would diverge the first time the naming changed, leaving the original

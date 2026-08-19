@@ -141,7 +141,48 @@ miss them, and the About window would report versions that disagree.
    silently failed cannot be mistaken for a stripped entitlement.
    `AppGroupIdentifierTests` reads the Release file too, because it is the one that
    ships: a bare `group.…` id there would deny the extension its container in
-   released builds only, while every Debug build kept working.
+   released builds only, while every Debug build kept working, and
+   `ReleaseEntitlementsTests` asserts the whole declaration — see
+   [Continuous installer builds](#continuous-installer-builds).
+
+### Continuous installer builds
+
+A release path that only ever runs on a tag runs for the first time when it matters
+most. So the installer is built continuously, split by the one thing that actually
+divides it — whether a step needs credentials:
+
+| Tier | Where | Trigger | Needs secrets | Proves |
+|---|---|---|---|---|
+| Unsigned smoke | `ci.yml` → `installer` | every PR + push to `main` | no | the Release configuration builds, the version reaches all three bundles, packaging works |
+| Signed + notarized | `release.yml` | every tag; pushes to `main` once enabled | yes | export, Developer ID signing, both notary submissions, stapling, `gh release create` |
+
+The unsigned tier runs `make dmg SIGNING=none`, which needs no certificate, no
+provisioning profile and no App Store Connect key — so it also works on a fork PR,
+where secrets are unavailable however the repository is configured, and on a
+developer Mac with no Xcode account. It builds with `VERSION=0.0.0` and the run
+number as the build, so an About window reading `0.0.0 (1234)` says plainly that
+this is not a release while still naming the run that produced it. `SIGNING=none`
+skips three steps and prints why for each: `-exportArchive` (nothing to re-sign, and
+it needs the profiles that are missing), the entitlements check, and signing the
+image.
+
+The entitlements check is the interesting omission. `make-dmg.sh` reads the shipped
+`.appex`'s entitlements out of its **code signature**, and an unsigned bundle is
+ad-hoc (linker-signed): `codesign -d --entitlements` then exits `0` and writes no
+file at all. So the check cannot pass unsigned, and letting it fail would report
+"the entitlements did not survive export" about a build that was never signed.
+`ReleaseEntitlementsTests` covers the *declarations* instead — both files parsed
+with `PropertyListSerialization`, the Release file without testing-mode, the Debug
+file with it as a positive control, and `project.yml` mapping the Release config to
+the Release file. The two are complementary: a unit test cannot prove what codesign
+applied, and the artifact check cannot run without credentials.
+
+Pushing to `main` also publishes a rolling `main-latest` prerelease, deleted and
+recreated each time (`gh release delete … --cleanup-tag`), so `gh release create`
+is exercised too. It cannot re-trigger the workflow — the tag filter is `v*`. Gated
+on the `RELEASE_SIGNING_ENABLED` repository variable, because until the secrets
+exist an unconditional signed job would fail on every push; a variable rather than
+a secret because `vars` can be read in a job-level `if` and `secrets` cannot.
 
 ### Running it locally
 
@@ -153,6 +194,7 @@ release is reproducible on a developer Mac with the same commands CI runs
 make release-version-test                # the tag parser's own tests
 make dmg VERSION=1.2.0 BUILD=1           # archive → export → signed dist/*.dmg
 make notarize                            # submit, staple, verify (needs an ASC key)
+make dmg SIGNING=none VERSION=0.0.0      # unsigned smoke build; no credentials
 ```
 
 `make dmg` needs a `Developer ID Application` identity and a Developer ID
@@ -160,7 +202,11 @@ provisioning profile for each of the three bundle ids. With no Xcode account
 signed in, `xcodebuild -exportArchive` fails with `No Accounts` / `No profiles for
 'com.owncloud.macos.fileprovider' were found`; sign in to Xcode, or pass an App
 Store Connect key (`ASC_KEY_PATH`, `ASC_KEY_ID`, `ASC_ISSUER_ID`) so automatic
-signing can mint them unattended, which is what CI does.
+signing can mint them unattended, which is what CI does. `SIGNING=none` is the way
+to exercise everything up to that point without any of it — the same command the
+per-PR installer tier runs. Its artifact is named `-unsigned` and `dist/`
+records the mode, so `make notarize` refuses it rather than submitting an ad-hoc
+signed image to Apple.
 
 `make notarize` takes no `VERSION`: it reads the image's path from
 `dist/artifact-path.txt`, written by `make dmg`, so the two cannot disagree about
@@ -179,7 +225,8 @@ is why `notarize.sh` rebuilds the `.dmg` rather than patching it.
 
 ### Required repository secrets
 
-None of these exist yet; a release cannot run until they are configured.
+None of these exist yet; a release cannot run until they are configured. The
+unsigned tier needs none of them, which is why it is the half that is proven.
 
 | Secret | Contents |
 |---|---|
@@ -189,6 +236,16 @@ None of these exist yet; a release cannot run until they are configured.
 | `APPLE_API_KEY_P8` | base64 of the App Store Connect `.p8` private key |
 | `APPLE_API_KEY_ID` | the key's ID |
 | `APPLE_API_ISSUER_ID` | the issuer UUID |
+
+And one repository **variable**:
+
+| Variable | Effect |
+|---|---|
+| `RELEASE_SIGNING_ENABLED` | `true` enables the rolling `main` build. Tags release regardless. |
+
+Setting it is the last step of enabling releases, and deliberately separate: the
+first signed run should be a push to `main` that can be watched and retried, not a
+tag someone is waiting on.
 
 ## Test harness (Task 1.4)
 
