@@ -30,7 +30,7 @@ struct SettingsWindow: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 240)
             .safeAreaInset(edge: .bottom) {
                 Button {
-                    model.addAccountError = nil
+                    model.beginAddAccount()
                     isAddingAccount = true
                 } label: {
                     Label("Add Account…", systemImage: "plus")
@@ -58,11 +58,15 @@ struct SettingsWindow: View {
     }
 }
 
-/// The Classic "Add Account" sign-in sheet (Task 7.11). A thin field-collector:
-/// it gathers the server address, user name and password, then hands them to
-/// `SettingsModel.addAccount`, which routes every decision through the tested
-/// `SignInResolver`. On success the model publishes no error and the sheet
-/// dismisses; on failure the model's `addAccountError` is shown inline.
+/// The "Add Account" sign-in sheet (Task 7.11, issue #17). A thin field-collector:
+/// it gathers the server address first, then — only if the probed server turns out to
+/// be Classic — a user name and password. Which fields to show, what the button says,
+/// and whether it is enabled all come from the tested `AddAccountFlow`; oCIS servers
+/// need no fields at all, because their identity arrives from the browser sign-in.
+///
+/// Every submission goes to `SettingsModel.submitAddAccount`, which routes the
+/// decisions through `SignInResolver`. The sheet dismisses when the model reports the
+/// account was added; a failure is shown inline via `addAccountError`.
 private struct AddAccountSheet: View {
     @ObservedObject var model: SettingsModel
     @Binding var isPresented: Bool
@@ -70,13 +74,11 @@ private struct AddAccountSheet: View {
     @State private var server = ""
     @State private var username = ""
     @State private var password = ""
-    @State private var isSigningIn = false
+    /// A submission is in flight. Distinct from `flow.isBusy`, which covers the oCIS
+    /// browser handoff specifically; this also covers the server probe.
+    @State private var isSubmitting = false
 
-    private var canSubmit: Bool {
-        !isSigningIn
-            && !server.trimmingCharacters(in: .whitespaces).isEmpty
-            && !username.trimmingCharacters(in: .whitespaces).isEmpty
-    }
+    private var flow: AddAccountFlow { model.addAccountFlow }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -86,12 +88,22 @@ private struct AddAccountSheet: View {
                 TextField("Server", text: $server, prompt: Text("http://localhost:8080"))
                     .textContentType(.URL)
                     .disableAutocorrection(true)
-                TextField("User Name", text: $username)
-                    .textContentType(.username)
-                SecureField("Password", text: $password)
-                    .textContentType(.password)
+                    .disabled(flow.showsCredentialFields || flow.isBusy)
+                if flow.showsCredentialFields {
+                    TextField("User Name", text: $username)
+                        .textContentType(.username)
+                    SecureField("Password", text: $password)
+                        .textContentType(.password)
+                }
             }
             .formStyle(.columns)
+
+            if let message = flow.message {
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if let error = model.addAccountError {
                 Text(error)
@@ -103,24 +115,26 @@ private struct AddAccountSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { isPresented = false }
-                Button("Sign In") { Task { await signIn() } }
+                Button(flow.primaryButtonTitle) { Task { await submit() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!canSubmit)
+                    .disabled(isSubmitting || !flow.canSubmit(server: server, username: username))
             }
         }
         .padding(20)
         .frame(width: 420)
         .overlay {
-            if isSigningIn { ProgressView().controlSize(.large) }
+            if isSubmitting { ProgressView().controlSize(.large) }
+        }
+        .onAppear { model.beginAddAccount() }
+        .onChange(of: model.addAccountDidFinish) { _, didFinish in
+            if didFinish { isPresented = false }
         }
     }
 
-    private func signIn() async {
-        isSigningIn = true
-        await model.addAccount(serverURL: server, username: username, password: password)
-        isSigningIn = false
-        // The model clears its error on success; a nil error means we're done.
-        if model.addAccountError == nil { isPresented = false }
+    private func submit() async {
+        isSubmitting = true
+        await model.submitAddAccount(serverURL: server, username: username, password: password)
+        isSubmitting = false
     }
 }
 

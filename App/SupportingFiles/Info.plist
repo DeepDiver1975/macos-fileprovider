@@ -64,6 +64,24 @@
                 <string>owncloud-fileprovider</string>
             </array>
         </dict>
+        <!--
+          Issue #17: the oCIS OIDC redirect. ASWebAuthenticationSession only captures
+          a callback whose scheme the app declares, and oCIS's shipped native client
+          registration redirects to oc://ios.owncloud.com — an exact string the IDP
+          matches literally, so the scheme is "oc" and not ours to choose. Keep this
+          in sync with OCISClientRegistration.ownCloudMobile.redirectURI, whose
+          derived callbackScheme is unit-tested.
+        -->
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.owncloud.macos.fileprovider.oidc</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>oc</string>
+            </array>
+        </dict>
     </array>
 </dict>
 </plist>

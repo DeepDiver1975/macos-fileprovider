@@ -526,17 +526,58 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     /// automatically by the keychain for the app-group form used here.
     private static let keychainAccessGroup = "com.owncloud.macos.fileprovider.shared"
 
+    /// The app group both the app and this extension are entitled to, holding the
+    /// OIDC refresh parameters and the refresh lock file. Team-prefixed — see
+    /// ``AppGroup`` for why the bare id silently denies *this* process the
+    /// container while leaving the app working.
+    private static let appGroup = AppGroup.identifier
+
     /// The `Authorization` header for this domain's account, read from the shared
     /// Keychain access group (Task 1.3 / 2.5). Returns `nil` when the account is
     /// unknown or no credentials are stored, so handlers fail cleanly with
     /// `.notAuthenticated` rather than sending unauthenticated requests.
+    ///
+    /// For an oCIS account the session is built **with** a refresh handler: oCIS
+    /// access tokens carry `expires_in=300`, so without one the domain would stop
+    /// working five minutes after sign-in (issue #17). The refresh parameters come
+    /// from the app-group ``OIDCSessionStore`` the app wrote at sign-in — this
+    /// process never ran OIDC discovery and so cannot know the token endpoint
+    /// otherwise. The ``FileLock`` is per account: several extension instances may
+    /// share one Keychain item, and without arbitration each would rotate the same
+    /// refresh token and sign the others out (Task 7.6).
+    ///
+    /// A Classic account has no record, keeps the refresh-less path, and never
+    /// touches the lock.
     private static func authorization(for account: AccountDescriptor?) -> String? {
         guard let account else { return nil }
         let store = KeychainCredentialStore(account: account, accessGroup: keychainAccessGroup)
-        let session = SessionManager(store: store)
+        let session = makeSession(store: store, accountIdentifier: account.accountIdentifier)
         // Refresh a bearer token that is at/near expiry before building the
         // header; a no-op for Basic auth and when no refresh handler is wired.
         try? session.refreshTokenIfNeeded()
         return try? session.authorizationHeader()
+    }
+
+    private static func makeSession(store: CredentialStore, accountIdentifier: String) -> SessionManager {
+        guard let container = FileManager.default
+                .containerURL(forSecurityApplicationGroupIdentifier: appGroup),
+              let record = OIDCSessionStore(
+                store: UserDefaultsKeyValueStore(defaults: UserDefaults(suiteName: appGroup) ?? .standard)
+              ).record(forAccount: accountIdentifier)
+        else {
+            return SessionManager(store: store)
+        }
+        // The sender blocks; it runs under the lock, off the main thread.
+        let sender = SynchronousTokenSender()
+        return SessionManager(
+            store: store,
+            refresh: OIDCRefreshHandler.make(
+                tokenEndpoint: record.tokenEndpoint,
+                clientID: record.clientID,
+                clientSecret: record.clientSecret,
+                scope: record.scope,
+                send: sender.send),
+            refreshLock: FileLock(
+                path: container.appendingPathComponent("refresh-\(accountIdentifier).lock").path))
     }
 }
