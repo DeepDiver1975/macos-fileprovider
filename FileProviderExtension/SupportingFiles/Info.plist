@@ -55,10 +55,11 @@
           Skipping provider' and NSFileProviderManager.add(domain:) then fails
           with NSFileProviderErrorProviderNotFound (-2001). The value must be an
           app group shared by the app and this extension — it matches the
-          com.apple.security.application-groups entitlement on both.
+          com.apple.security.application-groups entitlement on both, including
+          the $(AppIdentifierPrefix) team prefix that entitlement requires.
         -->
         <key>NSExtensionFileProviderDocumentGroup</key>
-        <string>group.com.owncloud.macos.fileprovider</string>
+        <string>$(AppIdentifierPrefix)group.com.owncloud.macos.fileprovider</string>
         <!--
           REQUIRED for a replicated (V3) extension. Without it the system starts
           the extension on the legacy V2 code path and aborts in

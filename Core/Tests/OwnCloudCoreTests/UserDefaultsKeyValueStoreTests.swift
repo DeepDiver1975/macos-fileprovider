@@ -2,9 +2,9 @@ import XCTest
 @testable import OwnCloudCore
 
 /// Task 7.3: the production `KeyValueStore` adapter over `UserDefaults`. In the
-/// app it is constructed with the app group suite name
-/// (`group.com.owncloud.macos.fileprovider`) so the app and the extension share
-/// the registry; here it runs over a throwaway suite.
+/// app it is constructed with the app group suite name (``AppGroup/identifier``) so
+/// the app and the extension share the registry; here it runs over a throwaway
+/// suite.
 final class UserDefaultsKeyValueStoreTests: XCTestCase {
 
     private var suiteName: String!

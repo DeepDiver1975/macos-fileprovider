@@ -11,6 +11,11 @@
   NSFileProviderDomainUsageDescription is deliberately absent: that key is for
   apps that CONSUME another provider's files, which this app does not
   (progress.md Task 1.2).
+
+  The app group id MUST keep the $(AppIdentifierPrefix) prefix. Unprefixed, the
+  app still works (it creates the container directory and owns it) while the
+  extension is denied it silently — see the note in
+  FileProviderExtension.entitlements and OwnCloudCore/AppGroup.swift.
 -->
 <plist version="1.0">
 <dict>
@@ -20,7 +25,7 @@
     <true/>
     <key>com.apple.security.application-groups</key>
     <array>
-        <string>group.com.owncloud.macos.fileprovider</string>
+        <string>$(AppIdentifierPrefix)group.com.owncloud.macos.fileprovider</string>
     </array>
     <key>keychain-access-groups</key>
     <array>

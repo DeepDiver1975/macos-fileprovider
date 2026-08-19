@@ -79,7 +79,7 @@ final class DevHarnessOCISModel: ObservableObject {
     /// outside the sandbox can read to verify the live run.
     private func writeReport(_ lines: [String]) {
         guard let dir = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.owncloud.macos.fileprovider") else { return }
+            forSecurityApplicationGroupIdentifier: AppGroup.identifier) else { return }
         let url = dir.appendingPathComponent("ocis-autorun-report.txt")
         try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
     }
