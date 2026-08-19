@@ -5,6 +5,9 @@ public enum OIDCIDTokenError: Error, Equatable {
     /// The token was not a `header.payload.signature` JWT, its payload was not
     /// base64url-encoded JSON, or the mandatory `sub` claim was absent.
     case malformed
+    /// A UserInfo response's `sub` was missing or did not match the `id_token`'s, so
+    /// it describes a different user and must not name this account (OIDC Core §5.3.2).
+    case subjectMismatch
 }
 
 /// The subset of `id_token` claims used to name an oCIS account at sign-in.
@@ -61,6 +64,32 @@ public enum OIDCIDToken {
             subject: subject,
             preferredUsername: nonEmptyString(object["preferred_username"]),
             email: nonEmptyString(object["email"]))
+    }
+
+    /// Fold a UserInfo response's claims into those already read from the `id_token`.
+    ///
+    /// OIDC Core §5.3 allows an IDP to return identity claims from the UserInfo
+    /// endpoint *instead of* in the `id_token`, and oCIS does exactly that: Konnect's
+    /// `id_token` carries only `sub`, while its UserInfo response carries
+    /// `preferred_username`. Without this merge every oCIS account is named by an
+    /// opaque 80-character subject.
+    ///
+    /// UserInfo wins where it supplies a claim, but never erases one the token already
+    /// carried. Per §5.3.2 the response's `sub` **must** match the token's — a mismatch
+    /// or missing subject throws ``OIDCIDTokenError/subjectMismatch`` rather than
+    /// renaming this account after a different user.
+    public static func merging(_ claims: OIDCIDTokenClaims,
+                               userInfoJSON data: Data) throws -> OIDCIDTokenClaims {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw OIDCIDTokenError.malformed
+        }
+        guard let subject = object["sub"] as? String, subject == claims.subject else {
+            throw OIDCIDTokenError.subjectMismatch
+        }
+        return OIDCIDTokenClaims(
+            subject: claims.subject,
+            preferredUsername: nonEmptyString(object["preferred_username"]) ?? claims.preferredUsername,
+            email: nonEmptyString(object["email"]) ?? claims.email)
     }
 
     /// A claim value as a non-empty `String`, or `nil` — so an IDP that issues an

@@ -71,6 +71,34 @@ final class OIDCSignInCoordinatorTests: XCTestCase {
         XCTAssertTrue(body.contains("code_verifier=verifier-xyz"), body)
     }
 
+    /// Signing in with a registered native client (the shipping path — see
+    /// ``OCISClientRegistration``) forwards that client's secret into the exchange.
+    func testForwardsClientSecretIntoTheCodeExchange() async throws {
+        var sentRequest: RemoteRequest?
+        let registration = OCISClientRegistration.ownCloudMobile
+
+        let coordinator = OIDCSignInCoordinator(
+            clientID: registration.clientID,
+            clientSecret: registration.clientSecret,
+            redirectURI: registration.redirectURI,
+            scope: registration.scope,
+            now: { Date(timeIntervalSince1970: 0) },
+            generateState: { "s" },
+            generateVerifier: { "v" },
+            fetchDiscovery: { _ in self.discoveryJSON },
+            authorize: { _ in URL(string: registration.redirectURI + "?code=c&state=s")! },
+            sendToken: { request in
+                sentRequest = request
+                return Data(#"{"access_token":"at","expires_in":1}"#.utf8)
+            })
+
+        _ = try await coordinator.signIn(serverURL: URL(string: "https://ocis.test")!)
+
+        let body = String(data: sentRequest?.jsonBody ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertTrue(body.contains("client_id=\(registration.clientID)"), body)
+        XCTAssertTrue(body.contains("client_secret=\(registration.clientSecret!)"), body)
+    }
+
     func testPropagatesStateMismatchFromCallback() async {
         let coordinator = OIDCSignInCoordinator(
             clientID: "web", redirectURI: "oc://ios.owncloud.com", scope: "openid",

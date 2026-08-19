@@ -62,6 +62,73 @@ final class OCISSignInResolverTests: XCTestCase {
         XCTAssertEqual(resolved.catalog.spaces.map(\.name), ["Personal", "Project X"])
     }
 
+    /// The oCIS reality (issue #17): Konnect's `id_token` carries only `sub`, so the
+    /// caller fetches UserInfo and hands the *merged* claims in. Resolving from claims
+    /// rather than re-parsing the JWT is what lets the account be named `admin` instead
+    /// of an opaque 80-character subject.
+    func testResolvesFromAlreadyMergedClaims() throws {
+        let claims = OIDCIDTokenClaims(
+            subject: "8yOyVyZLhuLQmPT6@vPIcOMWqgHWbKx1", preferredUsername: "admin", email: nil)
+
+        let resolved = try OCISSignInResolver.resolve(
+            serverURL: serverURL,
+            credentials: bearer(),
+            claims: claims,
+            drives: [drive(id: "1$personal", name: "Personal", type: "personal")],
+            spaces: .personalOnly)
+
+        XCTAssertEqual(resolved.account.username, "admin")
+        XCTAssertEqual(resolved.syncRoots.map(\.driveID), ["1$personal"])
+    }
+
+    /// What sign-in from the settings UI actually asks for (issue #17): mount the
+    /// personal space only. A user with a dozen project spaces should not get a dozen
+    /// Finder sidebar entries unasked — the rest are opted into from the Spaces tab,
+    /// which is why the **catalog still lists every drive**.
+    func testPersonalOnlySelectionSyncsOnlyThePersonalDriveButCatalogsAll() throws {
+        let drives = [
+            drive(id: "2$project", name: "Project X", type: "project"),
+            drive(id: "1$personal", name: "Personal", type: "personal"),
+            drive(id: "3$shares", name: "Shares", type: "virtual"),
+        ]
+
+        let resolved = try OCISSignInResolver.resolve(
+            serverURL: serverURL,
+            credentials: bearer(),
+            idToken: makeIDToken(payload: ["sub": "u-1", "preferred_username": "einstein"]),
+            drives: drives,
+            spaces: .personalOnly)
+
+        XCTAssertEqual(resolved.syncRoots.map(\.driveID), ["1$personal"])
+        XCTAssertEqual(resolved.catalog.spaces.map(\.name), ["Project X", "Personal", "Shares"])
+    }
+
+    /// `.all` stays the default so the existing callers (and the dev harness) keep
+    /// mounting every space.
+    func testDefaultSelectionIsEverySpace() throws {
+        let resolved = try OCISSignInResolver.resolve(
+            serverURL: serverURL,
+            credentials: bearer(),
+            idToken: makeIDToken(payload: ["sub": "u-1"]),
+            drives: [drive(id: "1$personal", name: "Personal", type: "personal"),
+                     drive(id: "2$project", name: "Project X", type: "project")])
+
+        XCTAssertEqual(resolved.syncRoots.count, 2)
+    }
+
+    /// A listing with no `driveType == "personal"` cannot satisfy a personal-only
+    /// sign-in; that is a typed error, not a silently empty domain list.
+    func testPersonalOnlyRejectsAListingWithNoPersonalSpace() {
+        XCTAssertThrowsError(try OCISSignInResolver.resolve(
+            serverURL: serverURL,
+            credentials: bearer(),
+            idToken: makeIDToken(payload: ["sub": "u-1"]),
+            drives: [drive(id: "2$project", name: "Project X", type: "project")],
+            spaces: .personalOnly)) { error in
+            XCTAssertEqual(error as? OCISSignInError, .noPersonalSpace)
+        }
+    }
+
     /// A malformed id_token surfaces as a typed error rather than a bad account name.
     func testRejectsMalformedIDToken() {
         XCTAssertThrowsError(try OCISSignInResolver.resolve(

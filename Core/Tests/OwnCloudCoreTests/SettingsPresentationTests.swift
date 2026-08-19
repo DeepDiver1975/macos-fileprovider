@@ -81,4 +81,68 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertFalse(status.isBlocked)
         XCTAssertNil(status.message)
     }
+
+    // MARK: - Add Account flow (issue #17)
+
+    /// The sheet cannot ask for a username up front any more: whether credentials are
+    /// even wanted depends on what the server turns out to be. So it starts at the
+    /// server step, where only the server field gates Continue.
+    func testFlowStartsAtTheServerStepAndOnlyNeedsAServer() {
+        let flow = AddAccountFlow.server
+        XCTAssertFalse(flow.showsCredentialFields)
+        XCTAssertFalse(flow.isBusy)
+        XCTAssertFalse(flow.canSubmit(server: "  ", username: ""))
+        XCTAssertTrue(flow.canSubmit(server: "localhost:8080", username: ""))
+    }
+
+    /// A Classic server advances to the credentials step, which does require a
+    /// username (the Basic-auth identity) but not a password — an empty password is a
+    /// server-side rejection, not something to block the button on.
+    func testClassicCredentialsStepRequiresAUsername() {
+        let flow = AddAccountFlow.classicCredentials(serverURL: URL(string: "http://localhost:8080")!)
+        XCTAssertTrue(flow.showsCredentialFields)
+        XCTAssertFalse(flow.isBusy)
+        XCTAssertFalse(flow.canSubmit(server: "http://localhost:8080", username: " "))
+        XCTAssertTrue(flow.canSubmit(server: "http://localhost:8080", username: "admin"))
+    }
+
+    /// While the browser sheet is up nothing is submittable — a second tap must not
+    /// start a second authorization.
+    func testAuthorizingStepIsBusyAndBlocksSubmission() {
+        let flow = AddAccountFlow.authorizing(serverURL: URL(string: "https://ocis.test")!)
+        XCTAssertTrue(flow.isBusy)
+        XCTAssertFalse(flow.showsCredentialFields)
+        XCTAssertFalse(flow.canSubmit(server: "https://ocis.test", username: "einstein"))
+    }
+
+    /// Each step names its own primary button, so the view has no wording decisions
+    /// left to make: "Continue" leads to a second step, "Sign In" completes.
+    func testEachStepLabelsItsPrimaryButton() {
+        XCTAssertEqual(AddAccountFlow.server.primaryButtonTitle, "Continue")
+        XCTAssertEqual(
+            AddAccountFlow.classicCredentials(serverURL: URL(string: "http://x.test")!).primaryButtonTitle,
+            "Sign In")
+        XCTAssertEqual(
+            AddAccountFlow.authorizing(serverURL: URL(string: "https://x.test")!).primaryButtonTitle,
+            "Signing In…")
+    }
+
+    /// The oCIS step explains where the user is being sent, and names the server, so
+    /// a browser window appearing is expected rather than alarming.
+    func testAuthorizingStepExplainsTheBrowserHandoff() {
+        let flow = AddAccountFlow.authorizing(serverURL: URL(string: "https://ocis.test")!)
+        let message = try? XCTUnwrap(flow.message)
+        XCTAssertTrue(message?.contains("ocis.test") == true, String(describing: message))
+    }
+
+    /// The route the resolver returns picks the next step — that mapping is a
+    /// decision, so it lives here rather than in the SwiftUI sheet.
+    func testFlowAdvancesAccordingToTheResolvedRoute() {
+        let ocis = URL(string: "https://ocis.test")!
+        XCTAssertEqual(AddAccountFlow.next(for: .oidc(serverURL: ocis)), .authorizing(serverURL: ocis))
+
+        let classicURL = URL(string: "http://localhost:8080")!
+        XCTAssertEqual(AddAccountFlow.next(for: .classic(serverURL: classicURL)),
+                       .classicCredentials(serverURL: classicURL))
+    }
 }

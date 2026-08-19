@@ -43,16 +43,19 @@ final class ServerProbeContractTests: XCTestCase {
     }
 
     /// The full sign-in resolution the settings window drives: probe the real
-    /// server, run `SignInResolver`, and confirm it yields a Classic Basic account.
+    /// server, route it, then resolve the credentials, and confirm it yields a
+    /// Classic Basic account.
     func testResolvesSignInAgainstLiveFixture() async throws {
         let probe = await HTTPServerProbe().probe(serverURL: serverURL)
-        let result = SignInResolver.resolve(
-            serverURL: serverURL.absoluteString,
-            username: username,
-            password: password,
-            probe: probe)
+        let route = try SignInResolver.route(
+            serverURL: serverURL.absoluteString, probe: probe).get()
 
-        let resolved = try result.get()
+        guard case .classic(let routedURL) = route else {
+            return XCTFail("the Classic fixture must route to a Classic sign-in, got \(route)")
+        }
+        let resolved = try SignInResolver.resolveClassic(
+            serverURL: routedURL, username: username, password: password).get()
+
         XCTAssertEqual(resolved.account.backend, .classic)
         XCTAssertEqual(resolved.account.username, username)
         XCTAssertEqual(resolved.credentials, .basic(username: username, password: password))

@@ -25,6 +25,38 @@ final class OIDCDiscoveryTests: XCTestCase {
         XCTAssertEqual(config.tokenEndpoint, URL(string: "https://ocis.test/idp/token"))
     }
 
+    /// `userinfo_endpoint` is optional in RFC 8414 but load-bearing for oCIS: Konnect's
+    /// `id_token` carries only `sub`, so the human-facing account name has to come from
+    /// UserInfo (OIDC Core §5.3). Parsing must therefore surface it when advertised.
+    func testParsesOptionalUserInfoEndpoint() throws {
+        let json = Data("""
+        {
+          "issuer": "https://ocis.test",
+          "authorization_endpoint": "https://ocis.test/idp/authorize",
+          "token_endpoint": "https://ocis.test/idp/token",
+          "userinfo_endpoint": "https://ocis.test/konnect/v1/userinfo"
+        }
+        """.utf8)
+
+        let config = try OIDCConfiguration(discoveryJSON: json)
+
+        XCTAssertEqual(config.userInfoEndpoint, URL(string: "https://ocis.test/konnect/v1/userinfo"))
+    }
+
+    /// A document without `userinfo_endpoint` is still valid — only the two mandatory
+    /// endpoints gate parsing, and the caller falls back to the `id_token`'s claims.
+    func testAcceptsDocumentWithoutUserInfoEndpoint() throws {
+        let json = Data("""
+        {
+          "issuer": "https://ocis.test",
+          "authorization_endpoint": "https://ocis.test/idp/authorize",
+          "token_endpoint": "https://ocis.test/idp/token"
+        }
+        """.utf8)
+
+        XCTAssertNil(try OIDCConfiguration(discoveryJSON: json).userInfoEndpoint)
+    }
+
     func testRejectsDocumentMissingTokenEndpoint() {
         let json = Data("""
         {"issuer":"https://ocis.test","authorization_endpoint":"https://ocis.test/idp/authorize"}
