@@ -150,4 +150,132 @@ final class WebDAVMultiStatusParserTests: XCTestCase {
         let garbage = Data("<d:multistatus><unterminated".utf8)
         XCTAssertThrowsError(try WebDAVMultiStatusParser().parse(garbage))
     }
+
+    // MARK: - oCIS space WebDAV (Task 4.5)
+
+    /// Verbatim `Depth: 1` response from oCIS 8.2.0 on
+    /// `/dav/spaces/{driveID}/mapper-probe`, for the production prop set plus
+    /// `oc:file-parent` and `oc:name`. Captured live rather than hand-written, so
+    /// the shape below (including the split propstats) is what the server sends.
+    ///
+    /// Two things differ from Classic and both matter:
+    /// - `oc:file-parent` gives the parent's `oc:id` directly, so an id-addressed
+    ///   PROPFIND needs no href parsing to find its parent;
+    /// - the folder's absent `d:getcontentlength`/`d:getcontenttype` come back in a
+    ///   **second propstat with status 404**, not omitted entirely.
+    private let ocisMultiStatusXML = """
+    <?xml version="1.0" ?>
+    <d:multistatus xmlns:s="http://sabredav.org/ns" xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+      <d:response>
+        <d:href>/dav/spaces/e876c6de-dc43-4a0f-a58e-b77a1e8db031$9c566819-f305-49d1-8015-e1c8d9ad3624/mapper-probe/</d:href>
+        <d:propstat>
+          <d:prop>
+            <d:resourcetype>
+              <d:collection/>
+            </d:resourcetype>
+            <d:getetag>"702e134c342841683014bc68331f2ef6"</d:getetag>
+            <d:getlastmodified>Wed, 19 Aug 2026 07:48:51 GMT</d:getlastmodified>
+            <oc:id>e876c6de-dc43-4a0f-a58e-b77a1e8db031$9c566819-f305-49d1-8015-e1c8d9ad3624!691a271d-006e-4066-a9cd-abeb79bc521e</oc:id>
+            <oc:size>12</oc:size>
+            <oc:permissions>RDNVCKZP</oc:permissions>
+            <oc:favorite>0</oc:favorite>
+            <oc:file-parent>e876c6de-dc43-4a0f-a58e-b77a1e8db031$9c566819-f305-49d1-8015-e1c8d9ad3624!9c566819-f305-49d1-8015-e1c8d9ad3624</oc:file-parent>
+            <oc:name>mapper-probe</oc:name>
+          </d:prop>
+          <d:status>HTTP/1.1 200 OK</d:status>
+        </d:propstat>
+        <d:propstat>
+          <d:prop>
+            <d:getcontentlength/>
+            <d:getcontenttype/>
+          </d:prop>
+          <d:status>HTTP/1.1 404 Not Found</d:status>
+        </d:propstat>
+      </d:response>
+      <d:response>
+        <d:href>/dav/spaces/e876c6de-dc43-4a0f-a58e-b77a1e8db031$9c566819-f305-49d1-8015-e1c8d9ad3624/mapper-probe/note.txt</d:href>
+        <d:propstat>
+          <d:prop>
+            <d:resourcetype/>
+            <d:getetag>"1553aa55df9a8c37b8a844f0a9cbb6a3"</d:getetag>
+            <d:getcontentlength>12</d:getcontentlength>
+            <d:getcontenttype>text/plain</d:getcontenttype>
+            <d:getlastmodified>Wed, 19 Aug 2026 07:48:51 GMT</d:getlastmodified>
+            <oc:id>e876c6de-dc43-4a0f-a58e-b77a1e8db031$9c566819-f305-49d1-8015-e1c8d9ad3624!76445d14-462e-4a62-bf8b-d69c15146396</oc:id>
+            <oc:size>12</oc:size>
+            <oc:permissions>RDNVWZP</oc:permissions>
+            <oc:favorite>0</oc:favorite>
+            <oc:file-parent>e876c6de-dc43-4a0f-a58e-b77a1e8db031$9c566819-f305-49d1-8015-e1c8d9ad3624!691a271d-006e-4066-a9cd-abeb79bc521e</oc:file-parent>
+            <oc:name>note.txt</oc:name>
+          </d:prop>
+          <d:status>HTTP/1.1 200 OK</d:status>
+        </d:propstat>
+      </d:response>
+    </d:multistatus>
+    """
+
+    func testParsesOCISParentFileIDAndServerName() throws {
+        let items = try WebDAVMultiStatusParser().parse(Data(ocisMultiStatusXML.utf8))
+        XCTAssertEqual(items.count, 2)
+
+        let folder = items[0]
+        XCTAssertEqual(
+            folder.parentFileID,
+            "e876c6de-dc43-4a0f-a58e-b77a1e8db031$9c566819-f305-49d1-8015-e1c8d9ad3624!9c566819-f305-49d1-8015-e1c8d9ad3624")
+        XCTAssertEqual(folder.serverName, "mapper-probe")
+
+        let file = items[1]
+        // The child's parent is the folder's own oc:id — the link an id-addressed
+        // enumeration relies on.
+        XCTAssertEqual(file.parentFileID, folder.fileID)
+        XCTAssertEqual(file.serverName, "note.txt")
+    }
+
+    func testAFolderWith404PropstatHasNoContentMetadata() throws {
+        // oCIS reports a collection's absent getcontentlength/getcontenttype in a
+        // 404 propstat rather than omitting them; they must not become values.
+        let folder = try WebDAVMultiStatusParser().parse(Data(ocisMultiStatusXML.utf8))[0]
+
+        XCTAssertTrue(folder.isDirectory)
+        XCTAssertNil(folder.contentLength)
+        XCTAssertNil(folder.contentType)
+        XCTAssertEqual(folder.ocSize, 12)
+        XCTAssertEqual(folder.permissions, "RDNVCKZP")
+        XCTAssertFalse(folder.isFavorite)
+    }
+
+    func testClassicResponsesLeaveTheOCISPropertiesNil() throws {
+        // Classic does not send oc:file-parent/oc:name, so both stay nil and the
+        // Classic mapping is unaffected.
+        let items = try WebDAVMultiStatusParser().parse(Data(multiStatusXML.utf8))
+        XCTAssertNil(items[0].parentFileID)
+        XCTAssertNil(items[0].serverName)
+    }
+
+    func testOCISPropertiesResetBetweenResponses() throws {
+        // A response that omits the props must not inherit the previous one's.
+        let xml = """
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+          <d:response>
+            <d:href>/dav/spaces/d1/a.txt</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype/><oc:file-parent>d1!p</oc:file-parent><oc:name>a.txt</oc:name></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/spaces/d1/b.txt</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype/></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>
+        """
+        let items = try WebDAVMultiStatusParser().parse(Data(xml.utf8))
+        XCTAssertEqual(items[0].parentFileID, "d1!p")
+        XCTAssertNil(items[1].parentFileID)
+        XCTAssertNil(items[1].serverName)
+    }
 }

@@ -99,52 +99,129 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertEqual(urls.last, "https://cloud.test/remote.php/dav/files/admin/Documents")
     }
 
-    // MARK: Graph (oCIS) — ID-addressed
+    // MARK: Space WebDAV (oCIS) — ID-addressed
 
-    func testOCISRootEnumerationTargetsTheDriveChildren() async throws {
-        var seen: URLRequest?
-        let account = AccountDescriptor(backend: .ocis, serverURL: URL(string: "https://ocis.test")!, username: "einstein")
-        let body = Data("""
-        { "value": [ { "id": "1", "name": "a.txt", "size": 3, "eTag": "e", "file": { "mimeType": "text/plain" } } ] }
+    /// oCIS enumeration and file I/O run over the space's own WebDAV endpoint under
+    /// `/dav/spaces`, not Graph — the Graph content endpoints 404 on oCIS 8.2.0
+    /// (Task 4.5). Addressing stays by `oc:id`, which oCIS accepts directly as a
+    /// WebDAV path and which survives rename and reparent. Every id is a *single*
+    /// segment under `/dav/spaces`: the drive id addresses the space root and a
+    /// fileid addresses an item, as siblings — `/dav/spaces/{driveID}/{fileID}`
+    /// 404s live, because a fileid already begins with the drive id.
+    private static let ocisDrive = "drive-1$space-1"
+    private static let ocisRootFileID = "drive-1$space-1!space-1"
+
+    /// A Depth:1 space-WebDAV body: the container itself, then one child.
+    private func ocisListingBody(
+        containerHref: String,
+        containerFileID: String,
+        childHref: String,
+        childFileID: String,
+        childName: String
+    ) -> Data {
+        Data("""
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+          <d:response><d:href>\(containerHref)</d:href>
+            <d:propstat><d:prop><oc:id>\(containerFileID)</oc:id><oc:name>container</oc:name>
+              <d:resourcetype><d:collection/></d:resourcetype></d:prop>
+            <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+          <d:response><d:href>\(childHref)</d:href>
+            <d:propstat><d:prop><oc:id>\(childFileID)</oc:id><oc:name>\(childName)</oc:name>
+              <oc:file-parent>\(containerFileID)</oc:file-parent>
+              <d:resourcetype/><d:getetag>"e"</d:getetag></d:prop>
+            <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+        </d:multistatus>
         """.utf8)
-        // The drive id is provided when the connection is built (sign-in resolved it).
-        let connection = BackendConnection(account: account, client: client(status: 200, body: body, capture: { seen = $0 }), authorization: "Bearer t", driveID: "drive-1")
+    }
 
-        let source = connection.enumerationSource(for: .rootContainer)
-        let page = try await source.fetchPage(cursor: nil)
+    private func ocisConnection(
+        status: Int = 200,
+        body: Data = Data(),
+        capture: ((URLRequest) -> Void)? = nil
+    ) -> BackendConnection {
+        let account = AccountDescriptor(backend: .ocis, serverURL: URL(string: "https://ocis.test")!, username: "einstein")
+        return BackendConnection(
+            account: account,
+            client: client(status: status, body: body, capture: capture),
+            authorization: "Bearer t",
+            driveID: Self.ocisDrive
+        )
+    }
 
-        // oCIS 8.2.0 404s on `/root/children` (proven live); the root container is
-        // enumerated by its item id, which for the root equals the drive id.
-        XCTAssertEqual(seen?.url?.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/drive-1/children")
+    func testOCISRootEnumerationPropfindsTheSpaceWebDAVRoot() async throws {
+        var seen: URLRequest?
+        let body = ocisListingBody(
+            containerHref: "/dav/spaces/drive-1%24space-1/",
+            containerFileID: Self.ocisRootFileID,
+            childHref: "/dav/spaces/drive-1%24space-1/a.txt",
+            childFileID: "\(Self.ocisDrive)!child-1",
+            childName: "a.txt")
+        let connection = ocisConnection(status: 207, body: body, capture: { seen = $0 })
+
+        let page = try await connection.enumerationSource(for: .rootContainer).fetchPage(cursor: nil)
+
+        // The space root is addressed by the drive id; `$` is percent-encoded per
+        // segment and oCIS accepts the escaped form (verified live: 207).
+        XCTAssertEqual(seen?.url?.absoluteString, "https://ocis.test/dav/spaces/drive-1%24space-1")
+        XCTAssertEqual(seen?.httpMethod, "PROPFIND")
+        XCTAssertEqual(seen?.value(forHTTPHeaderField: "Depth"), "1")
+        // The self entry is dropped and the child is identified by its oc:id.
         XCTAssertEqual(page.items.map(\.filename), ["a.txt"])
+        XCTAssertEqual(page.items.first?.identifier, ItemIdentifier(rawValue: "\(Self.ocisDrive)!child-1"))
+        XCTAssertEqual(page.items.first?.parentIdentifier, .rootContainer)
     }
 
-    func testOCISSubfolderEnumerationTargetsItsItemChildren() async throws {
-        // Regression: descending into an oCIS subfolder must enumerate THAT item's
-        // children (`/items/{itemID}/children`), not re-list the drive root. The
-        // connection previously ignored the container id for oCIS, so every folder
-        // showed the root's contents.
+    func testOCISSubfolderEnumerationPropfindsThatFolderByFileID() async throws {
         var seen: URLRequest?
-        let account = AccountDescriptor(backend: .ocis, serverURL: URL(string: "https://ocis.test")!, username: "einstein")
-        let body = Data("""
-        { "value": [ { "id": "child-1", "name": "inner.txt", "size": 1, "eTag": "e", "file": { "mimeType": "text/plain" } } ] }
-        """.utf8)
-        let connection = BackendConnection(account: account, client: client(status: 200, body: body, capture: { seen = $0 }), authorization: "Bearer t", driveID: "drive-1")
+        let folderID = "\(Self.ocisDrive)!folder-1"
+        let body = ocisListingBody(
+            containerHref: "/dav/spaces/drive-1%24space-1%21folder-1/",
+            containerFileID: folderID,
+            childHref: "/dav/spaces/drive-1%24space-1%21folder-1/inner.txt",
+            childFileID: "\(Self.ocisDrive)!child-2",
+            childName: "inner.txt")
+        let connection = ocisConnection(status: 207, body: body, capture: { seen = $0 })
 
-        let source = connection.enumerationSource(for: ItemIdentifier(rawValue: "drive-1!folder"))
-        _ = try await source.fetchPage(cursor: nil)
+        let page = try await connection.enumerationSource(for: ItemIdentifier(rawValue: folderID))
+            .fetchPage(cursor: nil)
 
-        XCTAssertEqual(seen?.url?.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/drive-1!folder/children")
+        // A subfolder is addressed by its own oc:id; `$` and `!` are escaped.
+        XCTAssertEqual(
+            seen?.url?.absoluteString,
+            "https://ocis.test/dav/spaces/drive-1%24space-1%21folder-1")
+        XCTAssertEqual(page.items.map(\.filename), ["inner.txt"])
+        // Children of a subfolder are parented to that folder, not the root.
+        XCTAssertEqual(page.items.first?.parentIdentifier, ItemIdentifier(rawValue: folderID))
     }
 
-    func testOCISFetchContentsTargetsTheItemContentEndpoint() {
-        let account = AccountDescriptor(backend: .ocis, serverURL: URL(string: "https://ocis.test")!, username: "einstein")
-        let connection = BackendConnection(account: account, client: client(status: 200, body: Data()), authorization: nil, driveID: "drive-1")
+    func testOCISEnumerationDropsTheSelfEntryByFileIDNotByHref() async throws {
+        // The self entry cannot be recognised by href: oCIS echoes the request's own
+        // percent-encoding in the response href (`%21` when the request escaped `!`),
+        // so a literal href comparison against the container address can miss it and
+        // leak the container in as a child of itself. Every oCIS entry carries oc:id,
+        // so the match is made on that instead.
+        let folderID = "\(Self.ocisDrive)!folder-1"
+        let body = ocisListingBody(
+            containerHref: "/dav/spaces/drive-1%24space-1%21folder-1/",
+            containerFileID: folderID,
+            childHref: "/dav/spaces/drive-1%24space-1%21folder-1/inner.txt",
+            childFileID: "\(Self.ocisDrive)!child-2",
+            childName: "inner.txt")
+        let connection = ocisConnection(status: 207, body: body)
 
-        let request = connection.fetchContentsRequest(itemID: "item-9")
+        let page = try await connection.enumerationSource(for: ItemIdentifier(rawValue: folderID))
+            .fetchPage(cursor: nil)
+
+        XCTAssertEqual(page.items.count, 1)
+        XCTAssertFalse(page.items.contains { $0.identifier == ItemIdentifier(rawValue: folderID) })
+    }
+
+    func testOCISFetchContentsGetsTheItemByFileID() {
+        let request = ocisConnection().fetchContentsRequest(itemID: "\(Self.ocisDrive)!item-9")
 
         XCTAssertEqual(request.method, .get)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9/content")
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/dav/spaces/drive-1%24space-1%21item-9")
     }
 
     // MARK: Push request shaping — Classic (path-addressed)
@@ -247,89 +324,167 @@ final class BackendConnectionTests: XCTestCase {
         XCTAssertNil(description)
     }
 
-    // MARK: Push request shaping — oCIS (ID-addressed)
+    // MARK: Push request shaping — oCIS (ID-addressed space WebDAV)
 
-    private func ocisConnection() -> BackendConnection {
-        let account = AccountDescriptor(backend: .ocis, serverURL: URL(string: "https://ocis.test")!, username: "einstein")
-        return BackendConnection(account: account, client: client(status: 200, body: Data()), authorization: nil, driveID: "drive-1")
-    }
-
-    func testOCISModifyContentsTargetsItemContentWithETag() {
-        let request = ocisConnection().modifyContentsRequest(itemID: "item-9", ifMatchETag: "\"e2\"")
+    func testOCISModifyContentsPutsToTheItemWithIfMatch() {
+        let request = ocisConnection().modifyContentsRequest(
+            itemID: "\(Self.ocisDrive)!item-9", ifMatchETag: "\"e2\"")
 
         XCTAssertEqual(request.method, .put)
         XCTAssertTrue(request.hasBody)
         XCTAssertEqual(request.headers["If-Match"], "\"e2\"")
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9/content")
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/dav/spaces/drive-1%24space-1%21item-9")
     }
 
-    func testOCISDeleteTargetsTheItem() {
-        let request = ocisConnection().deleteRequest(itemID: "item-9")
+    func testOCISDeleteTargetsTheItemByFileID() {
+        let request = ocisConnection().deleteRequest(itemID: "\(Self.ocisDrive)!item-9")
 
         XCTAssertEqual(request.method, .delete)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/dav/spaces/drive-1%24space-1%21item-9")
     }
 
-    func testOCISItemMetadataGetsTheItem() {
-        let request = ocisConnection().itemMetadataRequest(itemID: "item-9")
+    func testOCISItemMetadataIsADepthZeroPropfind() {
+        // Replaces the Graph `GET /items/{id}`: one Depth:0 PROPFIND yields
+        // identifier, parent (oc:file-parent) and name together.
+        let request = ocisConnection().itemMetadataRequest(itemID: "\(Self.ocisDrive)!item-9")
 
-        XCTAssertEqual(request.method, .get)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
+        XCTAssertEqual(request.method, .propfind)
+        XCTAssertEqual(request.headers["Depth"], "0")
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/dav/spaces/drive-1%24space-1%21item-9")
     }
 
-    func testOCISMovePatchesItemWithNameAndParent() throws {
-        let request = ocisConnection().moveRequest(itemID: "item-9", newName: "renamed.txt", newParentID: "parent-2")
+    func testOCISMoveUsesMoveWithAnIDAddressedDestination() {
+        // Verified live: MOVE by id with an absolute Destination returns 201, and the
+        // fileid is unchanged afterwards — across both a rename and a reparent.
+        let request = ocisConnection().moveRequest(
+            itemID: "\(Self.ocisDrive)!item-9",
+            newName: "renamed.txt",
+            newParentID: "\(Self.ocisDrive)!parent-2")
 
-        XCTAssertEqual(request.method, .patch)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/item-9")
-        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: request.jsonBody ?? Data()) as? [String: Any])
-        XCTAssertEqual(json["name"] as? String, "renamed.txt")
-        XCTAssertEqual((json["parentReference"] as? [String: Any])?["id"] as? String, "parent-2")
+        XCTAssertEqual(request.method, .move)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/dav/spaces/drive-1%24space-1%21item-9")
+        XCTAssertEqual(
+            request.headers["Destination"],
+            "https://ocis.test/dav/spaces/drive-1%24space-1%21parent-2/renamed.txt")
+        // Overwrite: F so a move never clobbers; oCIS answers 412 on collision.
+        XCTAssertEqual(request.headers["Overwrite"], "F")
     }
 
-    func testOCISCreateFolderPostsToParentChildren() {
-        let request = ocisConnection().createFolderRequest(parentID: "parent-1", name: "New Folder")
+    func testOCISMoveToTheRootAddressesTheSpaceRoot() {
+        // A nil new parent means "stay put" (pure rename); the root is the drive id.
+        let request = ocisConnection().moveRequest(
+            itemID: "\(Self.ocisDrive)!item-9",
+            newName: "renamed.txt",
+            newParentID: ItemIdentifier.rootContainer.rawValue)
 
-        XCTAssertEqual(request.method, .post)
-        XCTAssertTrue(request.hasBody)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1/children")
-    }
-
-    func testOCISUploadNewFilePutsUnderParentByName() {
-        let request = ocisConnection().uploadNewFileRequest(parentID: "parent-1", name: "note.txt")
-
-        XCTAssertEqual(request.method, .put)
-        XCTAssertTrue(request.hasBody)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1:/note.txt:/content")
+        XCTAssertEqual(
+            request.headers["Destination"],
+            "https://ocis.test/dav/spaces/drive-1%24space-1/renamed.txt")
     }
 
     // MARK: create-item routing (root vs. parent, file vs. folder)
 
-    func testOCISCreateFileUnderRootUsesRootSegment() {
-        let request = ocisConnection().createItemRequest(parentID: .rootContainer, name: "note.txt", isDirectory: false)
+    func testOCISCreateFileUnderRootPutsAtTheSpaceRoot() {
+        let request = ocisConnection().createItemRequest(
+            parentID: .rootContainer, name: "note.txt", isDirectory: false)
 
         XCTAssertEqual(request.method, .put)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/root:/note.txt:/content")
+        XCTAssertTrue(request.hasBody)
+        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/dav/spaces/drive-1%24space-1/note.txt")
     }
 
-    func testOCISCreateFileUnderParentUsesItemSegment() {
-        let request = ocisConnection().createItemRequest(parentID: ItemIdentifier(rawValue: "parent-1"), name: "note.txt", isDirectory: false)
+    func testOCISCreateFileUnderParentPutsUnderTheParentFileID() {
+        let request = ocisConnection().createItemRequest(
+            parentID: ItemIdentifier(rawValue: "\(Self.ocisDrive)!parent-1"),
+            name: "note.txt",
+            isDirectory: false)
 
         XCTAssertEqual(request.method, .put)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1:/note.txt:/content")
+        XCTAssertEqual(
+            request.url.absoluteString,
+            "https://ocis.test/dav/spaces/drive-1%24space-1%21parent-1/note.txt")
     }
 
-    func testOCISCreateFolderUnderRootPostsToRootChildren() {
-        let request = ocisConnection().createItemRequest(parentID: .rootContainer, name: "New Folder", isDirectory: true)
+    func testOCISCreateFolderUnderRootUsesMkcol() {
+        let request = ocisConnection().createItemRequest(
+            parentID: .rootContainer, name: "New Folder", isDirectory: true)
 
-        XCTAssertEqual(request.method, .post)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/root/children")
+        XCTAssertEqual(request.method, .mkcol)
+        XCTAssertEqual(
+            request.url.absoluteString,
+            "https://ocis.test/dav/spaces/drive-1%24space-1/New%20Folder")
     }
 
-    func testOCISCreateFolderUnderParentPostsToItemChildren() {
-        let request = ocisConnection().createItemRequest(parentID: ItemIdentifier(rawValue: "parent-1"), name: "New Folder", isDirectory: true)
+    func testOCISCreateFolderUnderParentUsesMkcolUnderTheParentFileID() {
+        let request = ocisConnection().createItemRequest(
+            parentID: ItemIdentifier(rawValue: "\(Self.ocisDrive)!parent-1"),
+            name: "New Folder",
+            isDirectory: true)
 
-        XCTAssertEqual(request.method, .post)
-        XCTAssertEqual(request.url.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/parent-1/children")
+        XCTAssertEqual(request.method, .mkcol)
+        XCTAssertEqual(
+            request.url.absoluteString,
+            "https://ocis.test/dav/spaces/drive-1%24space-1%21parent-1/New%20Folder")
+    }
+
+    func testOCISReadBackOfANewItemIsAddressedByNameUnderTheParent() {
+        // A just-created item has no oc:id yet — the server assigns it — so the
+        // read-back is the one PROPFIND addressed by name, at the same address the
+        // create wrote to.
+        let request = ocisConnection().readBackNewItemRequest(
+            parentID: ItemIdentifier(rawValue: "\(Self.ocisDrive)!parent-1"), name: "note.txt")
+
+        XCTAssertEqual(request.method, .propfind)
+        XCTAssertEqual(request.headers["Depth"], "0")
+        XCTAssertEqual(
+            request.url.absoluteString,
+            "https://ocis.test/dav/spaces/drive-1%24space-1%21parent-1/note.txt")
+    }
+
+    func testOCISReadBackOfANewItemUnderTheRootUsesTheDriveID() {
+        let request = ocisConnection().readBackNewItemRequest(parentID: .rootContainer, name: "note.txt")
+
+        XCTAssertEqual(
+            request.url.absoluteString,
+            "https://ocis.test/dav/spaces/drive-1%24space-1/note.txt")
+    }
+
+    // MARK: oCIS read-back
+
+    func testOCISReadBackParsesTheItemWithItsServerReportedParent() throws {
+        // oCIS PUT/MKCOL/MOVE return no body, so create/modify/move read the item
+        // back — the same shape as Classic. Unlike Classic the parent comes from the
+        // server (oc:file-parent), so the caller does not supply one.
+        let body = Data("""
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+          <d:response><d:href>/dav/spaces/drive-1%24space-1%21new-1</d:href>
+            <d:propstat><d:prop>
+              <oc:id>\(Self.ocisDrive)!new-1</oc:id>
+              <oc:name>note.txt</oc:name>
+              <oc:file-parent>\(Self.ocisRootFileID)</oc:file-parent>
+              <d:resourcetype/><d:getetag>"e9"</d:getetag>
+              <d:getcontentlength>12</d:getcontentlength>
+              <d:getcontenttype>text/plain</d:getcontenttype>
+            </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+        </d:multistatus>
+        """.utf8)
+
+        let item = try XCTUnwrap(ocisConnection().readBackItem(fromOCISPropfind: body))
+
+        XCTAssertEqual(item.identifier, ItemIdentifier(rawValue: "\(Self.ocisDrive)!new-1"))
+        // The root's oc:id normalises to .rootContainer.
+        XCTAssertEqual(item.parentIdentifier, .rootContainer)
+        XCTAssertEqual(item.filename, "note.txt")
+        XCTAssertEqual(item.versionIdentifier, "\"e9\"")
+        XCTAssertEqual(item.size, 12)
+    }
+
+    func testOCISReadBackReturnsNilForEmptyMultistatus() throws {
+        let body = Data("""
+        <?xml version="1.0"?><d:multistatus xmlns:d="DAV:"></d:multistatus>
+        """.utf8)
+
+        XCTAssertNil(try ocisConnection().readBackItem(fromOCISPropfind: body))
     }
 }

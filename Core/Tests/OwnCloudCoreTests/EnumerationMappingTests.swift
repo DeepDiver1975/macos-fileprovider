@@ -55,37 +55,93 @@ final class EnumerationMappingTests: XCTestCase {
         XCTAssertTrue(page.items.isEmpty)
     }
 
-    // MARK: - Graph
+    // MARK: - oCIS space WebDAV (Task 4.5)
 
-    private func graphItem(id: String, name: String) -> GraphItem {
-        GraphItem(
-            id: id, name: name, size: 1, eTag: "e", lastModified: nil,
-            isFolder: false, childCount: nil, mimeType: "text/plain",
-            parentDriveID: nil, parentID: nil, isDeleted: false
+    private static let drive = "drive-1$space-1"
+    private static let rootFileID = "drive-1$space-1!space-1"
+
+    private func ocisItem(
+        fileID: String,
+        name: String,
+        parentFileID: String?,
+        isDirectory: Bool = false
+    ) -> WebDAVItem {
+        WebDAVItem(
+            href: "/dav/spaces/drive-1%24space-1/\(name)",
+            isDirectory: isDirectory,
+            fileID: fileID,
+            etag: "\"e\"",
+            contentLength: isDirectory ? nil : 1,
+            contentType: isDirectory ? nil : "text/plain",
+            parentFileID: parentFileID,
+            serverName: name
         )
     }
 
-    func testGraphPageMapsItemsAndCarriesNextTokenAsCursor() {
-        let collection = GraphItemCollection(
-            items: [graphItem(id: "1", name: "a.txt"), graphItem(id: "2", name: "b.txt")],
-            deltaToken: nil,
-            nextToken: "page2"
-        )
-        let page = EnumerationPage(graphCollection: collection)
-        XCTAssertEqual(page.items.map(\.filename), ["a.txt", "b.txt"])
-        XCTAssertEqual(page.nextCursor, PageCursor(rawValue: "page2"))
-        // Only the final page (deltaLink) carries the anchor.
+    func testOCISPageDropsTheSpaceRootSelfEntry() {
+        // Enumerating the space root: the self entry's oc:id is the root's, which is
+        // not the bare driveID, so it is recognised structurally rather than by a
+        // caller-supplied container id.
+        let items = [
+            ocisItem(fileID: Self.rootFileID, name: "", parentFileID: Self.drive, isDirectory: true),
+            ocisItem(fileID: "\(Self.drive)!c1", name: "a.txt", parentFileID: Self.rootFileID),
+        ]
+        let page = EnumerationPage(ocisWebDAVItems: items, containerFileID: nil, driveID: Self.drive)
+
+        XCTAssertEqual(page.items.map(\.filename), ["a.txt"])
+        XCTAssertEqual(page.items.first?.parentIdentifier, .rootContainer)
+    }
+
+    func testOCISPageDropsASubfolderSelfEntryByFileID() {
+        let folderID = "\(Self.drive)!folder-1"
+        let items = [
+            ocisItem(fileID: folderID, name: "folder", parentFileID: Self.rootFileID, isDirectory: true),
+            ocisItem(fileID: "\(Self.drive)!c2", name: "inner.txt", parentFileID: folderID),
+        ]
+        let page = EnumerationPage(ocisWebDAVItems: items, containerFileID: folderID, driveID: Self.drive)
+
+        XCTAssertEqual(page.items.map(\.filename), ["inner.txt"])
+        XCTAssertEqual(page.items.first?.parentIdentifier, ItemIdentifier(rawValue: folderID))
+    }
+
+    func testOCISPageMatchesTheSelfEntryEvenWhenTheHrefEncodingDiffers() {
+        // The reason the match is on oc:id: oCIS echoes the request's percent-encoding
+        // in the href, so the container listed as `…%21folder-1` cannot be compared
+        // literally against an address spelled with `!`.
+        let folderID = "\(Self.drive)!folder-1"
+        let selfEntry = WebDAVItem(
+            href: "/dav/spaces/drive-1%24space-1%21folder-1/",
+            isDirectory: true,
+            fileID: folderID,
+            parentFileID: Self.rootFileID,
+            serverName: "folder")
+        let page = EnumerationPage(
+            ocisWebDAVItems: [selfEntry, ocisItem(fileID: "\(Self.drive)!c3", name: "x.txt", parentFileID: folderID)],
+            containerFileID: folderID,
+            driveID: Self.drive)
+
+        XCTAssertEqual(page.items.count, 1)
+        XCTAssertEqual(page.items.first?.filename, "x.txt")
+    }
+
+    func testOCISPageHasNoCursorOrAnchor() {
+        // oCIS space WebDAV has no delta token, exactly like Classic: one page, and
+        // the anchor is synthesized from the listing by the enumeration source.
+        let page = EnumerationPage(
+            ocisWebDAVItems: [ocisItem(fileID: "\(Self.drive)!c1", name: "a.txt", parentFileID: Self.rootFileID)],
+            containerFileID: Self.rootFileID,
+            driveID: Self.drive)
+
+        XCTAssertNil(page.nextCursor)
         XCTAssertNil(page.anchor)
     }
 
-    func testGraphFinalPageCarriesDeltaTokenAsAnchorAndNoCursor() {
-        let collection = GraphItemCollection(
-            items: [graphItem(id: "1", name: "a.txt")],
-            deltaToken: "sync-9",
-            nextToken: nil
-        )
-        let page = EnumerationPage(graphCollection: collection)
-        XCTAssertNil(page.nextCursor)
-        XCTAssertEqual(page.anchor, SyncAnchor(token: "sync-9"))
+    func testOCISPageKeepsItemsThatLackAFileID() {
+        // Defensive: an entry without oc:id cannot be the container (the container's
+        // id is known), so it is kept rather than silently dropped.
+        let items = [WebDAVItem(href: "/dav/spaces/drive-1%24space-1/odd.txt", isDirectory: false, serverName: "odd.txt")]
+        let page = EnumerationPage(ocisWebDAVItems: items, containerFileID: Self.rootFileID, driveID: Self.drive)
+
+        XCTAssertEqual(page.items.map(\.filename), ["odd.txt"])
     }
 }

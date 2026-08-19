@@ -2,6 +2,12 @@ import Foundation
 
 /// oCIS / Microsoft Graph domain models. Backend-agnostic and Foundation-only
 /// so the Graph client stays Linux-buildable for the AC-2 backend-contract tier.
+///
+/// Only *drive* (space) models live here. Graph's role is space discovery alone —
+/// file and folder I/O runs over each space's WebDAV endpoint, so the `driveItem`
+/// models this file used to carry were removed with the Graph file-operation layer
+/// (Task 4.5; see ``GraphRequestBuilder`` for the 404 evidence). The WebDAV
+/// counterpart is ``WebDAVItem``.
 
 /// A Graph `drive` (an oCIS space: personal, project, virtual "Shares", …).
 public struct GraphDrive: Equatable, Sendable {
@@ -28,30 +34,8 @@ public struct GraphQuota: Equatable, Sendable {
 
 public struct GraphDriveRoot: Equatable, Sendable {
     public let id: String?
+    /// The space's own WebDAV endpoint, `{server}/dav/spaces/{driveID}` — the route
+    /// all file and folder I/O for the space goes through. See
+    /// ``SpaceWebDAVEndpoint/baseURL(serverURL:driveID:reportedWebDavURL:)``.
     public let webDavUrl: String?
-}
-
-/// A Graph `driveItem` (file or folder) reduced to what the provider needs.
-public struct GraphItem: Equatable, Sendable {
-    public let id: String
-    public let name: String
-    public let size: Int?
-    public let eTag: String?
-    public let lastModified: Date?
-    public let isFolder: Bool
-    public let childCount: Int?
-    public let mimeType: String?
-    public let parentDriveID: String?
-    public let parentID: String?
-    /// `true` when the item carries a `deleted` facet (delta responses).
-    public let isDeleted: Bool
-}
-
-/// A page of items plus the sync/paging tokens a delta response carries.
-public struct GraphItemCollection: Equatable, Sendable {
-    public let items: [GraphItem]
-    /// `$token` extracted from `@odata.deltaLink` — the next delta sync anchor.
-    public let deltaToken: String?
-    /// `$token` extracted from `@odata.nextLink` — the next page within one enumeration.
-    public let nextToken: String?
 }

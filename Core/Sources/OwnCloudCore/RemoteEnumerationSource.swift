@@ -123,37 +123,58 @@ public struct WebDAVEnumerationSource: RemoteEnumerationSource {
     }
 }
 
-/// Enumerates an oCIS drive via Graph: the first page is `/root/children`,
-/// subsequent pages follow the opaque `$token` against `/root/delta` (the same
-/// endpoint that powers change tracking). `@odata.nextLink` becomes the next
-/// cursor; `@odata.deltaLink` (final page only) becomes the sync anchor.
-public struct GraphEnumerationSource: RemoteEnumerationSource {
+/// Enumerates a container in an oCIS space over that space's own WebDAV endpoint
+/// (Task 4.5) — a `PROPFIND Depth:1`, exactly as Classic, differing only in how
+/// the container is addressed: by `oc:id` rather than by path.
+///
+/// This replaces the former Graph-based source. oCIS 8.2.0 does not serve the
+/// Graph endpoints that layer targeted (`/root/children` 404s, and so do the
+/// content routes), whereas `/dav/spaces/{driveID}` answers every WebDAV verb.
+/// `owncloud/client` is arranged the same way: Graph lists drives, and the
+/// per-space `webDavUrl` is handed to the same jobs Classic uses.
+///
+/// Like Classic there is no delta token, so the anchor is synthesized from the
+/// listing and there is exactly one page.
+public struct OCISWebDAVEnumerationSource: RemoteEnumerationSource {
     private let client: RemoteClient
-    private let builder: GraphRequestBuilder
+    private let builder: WebDAVRequestBuilder
+    /// The container's address relative to the space WebDAV base: `/` for the
+    /// space root, else `/{oc:id}`.
+    private let containerPath: String
+    /// The container's own `oc:id`, used to drop the Depth:1 self entry. `nil` for
+    /// the space root, whose id is recognised structurally instead.
+    private let containerFileID: String?
     private let driveID: String
-    /// The container item whose children this source enumerates. For the drive
-    /// root this is the root item id (== the driveID); for a subfolder it is that
-    /// folder's item id.
-    private let itemID: String
     private let authorization: String?
 
     public init(
         client: RemoteClient,
-        builder: GraphRequestBuilder,
+        builder: WebDAVRequestBuilder,
+        containerPath: String,
+        containerFileID: String?,
         driveID: String,
-        itemID: String,
         authorization: String?
     ) {
         self.client = client
         self.builder = builder
+        self.containerPath = containerPath
+        self.containerFileID = containerFileID
         self.driveID = driveID
-        self.itemID = itemID
         self.authorization = authorization
     }
 
     public func fetchPage(cursor: PageCursor?) async throws -> EnumerationPage {
-        let data = try await client.send(builder.enumerate(driveID: driveID, itemID: itemID, cursor: cursor), authorization: authorization)
-        let collection = try GraphJSONDecoder().decodeItemCollection(data)
-        return EnumerationPage(graphCollection: collection)
+        let data = try await client.send(builder.enumerate(path: containerPath), authorization: authorization)
+        let items = try WebDAVMultiStatusParser().parse(data)
+        let page = EnumerationPage(
+            ocisWebDAVItems: items,
+            containerFileID: containerFileID,
+            driveID: driveID
+        )
+        return EnumerationPage(
+            items: page.items,
+            nextCursor: nil,
+            anchor: SyncAnchor(listing: page.items)
+        )
     }
 }

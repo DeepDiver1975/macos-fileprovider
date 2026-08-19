@@ -37,6 +37,16 @@ public struct WebDAVItem: Equatable, Sendable {
     /// `oc:favorite` == `1`.
     public let isFavorite: Bool
 
+    /// oCIS's `oc:file-parent` — the parent's `oc:id`. `nil` on Classic, which
+    /// does not send the property; there the enumerator supplies the parent
+    /// instead. Its presence is what lets oCIS be addressed purely by id, with no
+    /// href parsing (Task 4.5).
+    public let parentFileID: String?
+
+    /// oCIS's `oc:name` — the item's name as the server spells it, already
+    /// decoded. `nil` on Classic; ``name`` is the fallback there.
+    public let serverName: String?
+
     public init(
         href: String,
         isDirectory: Bool,
@@ -47,7 +57,9 @@ public struct WebDAVItem: Equatable, Sendable {
         contentType: String? = nil,
         lastModified: Date? = nil,
         permissions: String? = nil,
-        isFavorite: Bool = false
+        isFavorite: Bool = false,
+        parentFileID: String? = nil,
+        serverName: String? = nil
     ) {
         self.href = href
         self.isDirectory = isDirectory
@@ -59,6 +71,8 @@ public struct WebDAVItem: Equatable, Sendable {
         self.lastModified = lastModified
         self.permissions = permissions
         self.isFavorite = isFavorite
+        self.parentFileID = parentFileID
+        self.serverName = serverName
     }
 
     /// User-visible name: the last path segment of `href`, trailing slash

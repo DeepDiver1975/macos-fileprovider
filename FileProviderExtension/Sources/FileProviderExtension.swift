@@ -86,12 +86,24 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
-        // The system asks for a single item's current metadata. The root container
-        // is synthetic (no backend round-trip). Otherwise fetch it: oCIS GETs the
-        // driveItem (which carries its own parent); Classic reuses the Depth:0
-        // PROPFIND read-back, deriving the parent by dropping the last path segment
-        // (WebDAV hrefs don't carry a parent id).
-        if identifier == .rootContainer {
+        // The system asks for a single item's current metadata. Like
+        // `enumerator(for:)` this receives the framework's *reserved* identifiers as
+        // well as server ids, so it resolves them the same way — otherwise the
+        // reserved raw value is sent as an address, which was observed live as
+        // `PROPFIND /dav/spaces/NSFileProviderTrashContainerItemIdentifier → 404`
+        // repeating for as long as the domain stayed mounted. Trash resolves to nil
+        // and is refused; the root and working set are answered synthetically, since
+        // no server serves a "root" name either.
+        //
+        // Otherwise both backends do the same Depth:0 PROPFIND read-back (Task 4.5);
+        // they differ only in where the parent comes from — oCIS serves it as
+        // `oc:file-parent`, while Classic needs it derived by dropping the last path
+        // segment (WebDAV hrefs don't carry a parent id).
+        guard let resolved = ItemIdentifier(rawValue: identifier.rawValue).resolvedContainer else {
+            completionHandler(nil, NSFileProviderError(.noSuchItem))
+            return Progress()
+        }
+        if resolved == .rootContainer {
             let root = FileProviderItemDescription.rootContainer(filename: domain.displayName)
             completionHandler(FileProviderItem(itemDescription: root), nil)
             return Progress()
@@ -119,9 +131,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let auth = FileProviderExtension.authorization(for: account)
         switch connection.account.backend {
         case .ocis:
+            // Space WebDAV: one Depth:0 PROPFIND at the item's `oc:id` yields
+            // identifier, parent and name together, so nothing is derived here.
             let body = try await client.send(connection.itemMetadataRequest(itemID: identifier.rawValue), authorization: auth)
-            let item = try GraphJSONDecoder().decodeItem(body)
-            return FileProviderItem(itemDescription: FileProviderItemDescription(graphItem: item))
+            guard let description = try connection.readBackItem(fromOCISPropfind: body) else {
+                throw NSFileProviderError(.noSuchItem)
+            }
+            return FileProviderItem(itemDescription: description)
         case .classic:
             // The Classic identifier is the server-relative path; its parent is the
             // path with the last segment removed ("/" for a child of the root).
@@ -200,10 +216,11 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
     ) -> Progress {
-        // Phase 4, Task 4.4. The two backends reconcile the created item
-        // differently: oCIS returns the driveItem (its assigned id + eTag) in the
-        // response body, while Classic's PUT/MKCOL returns no body and needs a
-        // Depth:0 PROPFIND read-back to learn the server-assigned id and etag.
+        // Phase 4, Task 4.4. Both backends now write then read back: a WebDAV
+        // PUT/MKCOL returns no metadata body either way, so a Depth:0 PROPFIND
+        // learns the server-assigned id and etag. They differ only in how the new
+        // item is addressed — a path for Classic, `{parent oc:id}/{name}` for oCIS
+        // (Task 4.5; the Graph create endpoints this used to call 404 on 8.2.0).
         let isDirectory = itemTemplate.contentType == .folder
         let parentIdentifier = itemTemplate.parentItemIdentifier
         let parent: ItemIdentifier = parentIdentifier == .rootContainer
@@ -236,8 +253,11 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         return Progress()
     }
 
-    /// oCIS create: the response body is the created driveItem, so it reconciles
-    /// directly with no read-back.
+    /// oCIS create: `MKCOL`/`PUT` at `{parent oc:id}/{name}` returns no metadata
+    /// body, so the new item is read back with a Depth:0 PROPFIND — the same shape
+    /// as ``createItemClassic``. The read-back is addressed by *path* rather than by
+    /// id because the server assigns the `oc:id`, which is not known until it is
+    /// read; it is the one place oCIS addressing is name-based (Task 4.5).
     private func createItemOCIS(
         connection: BackendConnection,
         parent: ItemIdentifier,
@@ -248,19 +268,24 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let createRequest = connection.createItemRequest(parentID: parent, name: name, isDirectory: isDirectory)
         let uploader = ContentUploader(client: client)
         let auth = FileProviderExtension.authorization(for: account)
-        // A folder POST carries its JSON body in the request; a file PUT streams
-        // the contents the system handed us.
-        let responseBody: Data
+        // Write first (create the collection, or stream the file bytes), discarding
+        // the empty response.
         if isDirectory {
-            responseBody = try await client.send(createRequest, authorization: auth)
+            _ = try await client.send(createRequest, authorization: auth)
         } else if let url {
-            responseBody = try await uploader.uploadReturningBody(createRequest, fromFile: url, authorization: auth)
+            _ = try await uploader.uploadReturningBody(createRequest, fromFile: url, authorization: auth)
         } else {
             // A non-directory create with no contents is a zero-byte file.
-            responseBody = try await client.send(createRequest, body: Data(), authorization: auth)
+            _ = try await client.send(createRequest, body: Data(), authorization: auth)
         }
-        let created = try GraphJSONDecoder().decodeItem(responseBody)
-        return FileProviderItem(itemDescription: FileProviderItemDescription(graphItem: created))
+        let body = try await client.send(
+            connection.readBackNewItemRequest(parentID: parent, name: name), authorization: auth)
+        guard let description = try connection.readBackItem(fromOCISPropfind: body) else {
+            // The write succeeded but the read-back found nothing — a server-side
+            // error, rather than reporting a bogus item.
+            throw NSFileProviderError(.serverUnreachable)
+        }
+        return FileProviderItem(itemDescription: description)
     }
 
     /// Classic create: PUT/MKCOL return no metadata body, so after the write we
@@ -377,10 +402,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         return Progress()
     }
 
-    /// Rename and/or move an item: WebDAV `MOVE` (path-addressed) for Classic and
-    /// Graph `PATCH` (id-addressed) for oCIS. The reparent target is only sent
-    /// when `.parentItemIdentifier` actually changed, so a pure rename stays in
-    /// place.
+    /// Rename and/or move an item: a WebDAV `MOVE` on both backends, differing only
+    /// in the address — a path for Classic, the item's `oc:id` for oCIS (Task 4.5).
+    /// The reparent target is only sent when `.parentItemIdentifier` actually
+    /// changed, so a pure rename stays in place.
     private func moveItem(
         connection: BackendConnection,
         item: NSFileProviderItem,
@@ -398,9 +423,15 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 newName: newName,
                 newParentID: parentChanged ? parent.rawValue : nil
             )
-            let body = try await client.send(moveRequest, authorization: auth)
-            let updated = try GraphJSONDecoder().decodeItem(body)
-            return FileProviderItem(itemDescription: FileProviderItemDescription(graphItem: updated))
+            _ = try await client.send(moveRequest, authorization: auth)
+            // MOVE returns no body. The fileid survives a rename *and* a reparent
+            // (verified live), so the item is read back at its unchanged `oc:id`.
+            let body = try await client.send(
+                connection.itemMetadataRequest(itemID: item.itemIdentifier.rawValue), authorization: auth)
+            guard let description = try connection.readBackItem(fromOCISPropfind: body) else {
+                throw NSFileProviderError(.serverUnreachable)
+            }
+            return FileProviderItem(itemDescription: description)
         case .classic:
             // WebDAV is path-addressed: the destination path is the new parent's
             // path joined with the new filename. Root is served at "/".
@@ -417,8 +448,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         }
     }
 
-    /// oCIS content modify: PUT on `/items/{id}/content` returns the updated
-    /// driveItem, so it reconciles directly.
+    /// oCIS content modify: a PUT at the item's `oc:id` returns no metadata body, so
+    /// the item is read back for its new etag — mirroring ``modifyContentsClassic``,
+    /// but addressed by id, and with no parent to supply (Task 4.5).
     private func modifyContentsOCIS(
         connection: BackendConnection,
         itemID: String,
@@ -428,14 +460,17 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let modifyRequest = connection.modifyContentsRequest(itemID: itemID, ifMatchETag: etag)
         let uploader = ContentUploader(client: client)
         let auth = FileProviderExtension.authorization(for: account)
-        let responseBody: Data
         if let newContents {
-            responseBody = try await uploader.uploadReturningBody(modifyRequest, fromFile: newContents, authorization: auth)
+            _ = try await uploader.uploadReturningBody(modifyRequest, fromFile: newContents, authorization: auth)
         } else {
-            responseBody = try await client.send(modifyRequest, body: Data(), authorization: auth)
+            _ = try await client.send(modifyRequest, body: Data(), authorization: auth)
         }
-        let updated = try GraphJSONDecoder().decodeItem(responseBody)
-        return FileProviderItem(itemDescription: FileProviderItemDescription(graphItem: updated))
+        let body = try await client.send(
+            connection.itemMetadataRequest(itemID: itemID), authorization: auth)
+        guard let description = try connection.readBackItem(fromOCISPropfind: body) else {
+            throw NSFileProviderError(.serverUnreachable)
+        }
+        return FileProviderItem(itemDescription: description)
     }
 
     /// Classic content modify: a WebDAV PUT returns no metadata body, so after the
@@ -502,10 +537,17 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         // `enumerator(for:)` is synchronous, but oCIS drive-id resolution is async.
         // Defer building the real source (which needs a resolved `BackendConnection`)
         // to the first page fetch via `LazyRemoteEnumerationSource`.
-        let isRoot = containerItemIdentifier == .rootContainer
-        let container: ItemIdentifier = isRoot
-            ? .rootContainer
-            : ItemIdentifier(rawValue: containerItemIdentifier.rawValue)
+        //
+        // The identifier may be one the framework reserves rather than a server id:
+        // `.rootContainer`, `.workingSet` (its recents/favourites feed) or
+        // `.trashContainer`. None of them addresses anything on either backend, so
+        // `resolvedContainer` resolves them — the first two onto the space root, and
+        // trash to `nil`, which this provider does not serve (its 404s were observed
+        // live). See `ItemIdentifier.resolvedContainer` (Task 4.5).
+        guard let container = ItemIdentifier(rawValue: containerItemIdentifier.rawValue).resolvedContainer else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError)
+        }
+        let isRoot = container == .rootContainer
         let source = LazyRemoteEnumerationSource {
             let connection = try await self.makeConnection()
             return connection.enumerationSource(for: container)

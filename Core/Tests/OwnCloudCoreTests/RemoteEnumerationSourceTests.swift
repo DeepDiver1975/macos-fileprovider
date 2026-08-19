@@ -136,70 +136,109 @@ final class RemoteEnumerationSourceTests: XCTestCase {
         }
     }
 
-    // MARK: - Graph
+    // MARK: - oCIS space WebDAV (Task 4.5)
 
-    private func graphBody(nextLink: String?, deltaLink: String?) -> Data {
-        let links = [
-            nextLink.map { "\"@odata.nextLink\": \"\($0)\"," } ?? "",
-            deltaLink.map { "\"@odata.deltaLink\": \"\($0)\"," } ?? "",
-        ].joined()
-        return Data("""
-        {
-          \(links)
-          "value": [
-            { "id": "1", "name": "a.txt", "size": 10, "eTag": "e1", "file": { "mimeType": "text/plain" } },
-            { "id": "2", "name": "b.txt", "size": 20, "eTag": "e2", "file": { "mimeType": "text/plain" } }
-          ]
-        }
+    private static let ocisDrive = "drive-1$space-1"
+    private static let ocisRootFileID = "drive-1$space-1!space-1"
+
+    /// A Depth:1 space-WebDAV body: the container itself, then two children.
+    private func ocisBody(containerFileID: String) -> Data {
+        Data("""
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+          <d:response><d:href>/dav/spaces/drive-1%24space-1/</d:href>
+            <d:propstat><d:prop><oc:id>\(containerFileID)</oc:id><oc:name>container</oc:name>
+              <d:resourcetype><d:collection/></d:resourcetype></d:prop>
+            <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+          <d:response><d:href>/dav/spaces/drive-1%24space-1/a.txt</d:href>
+            <d:propstat><d:prop><oc:id>\(Self.ocisDrive)!c1</oc:id><oc:name>a.txt</oc:name>
+              <oc:file-parent>\(containerFileID)</oc:file-parent>
+              <d:resourcetype/><d:getetag>"e1"</d:getetag><d:getcontentlength>10</d:getcontentlength></d:prop>
+            <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+          <d:response><d:href>/dav/spaces/drive-1%24space-1/b.txt</d:href>
+            <d:propstat><d:prop><oc:id>\(Self.ocisDrive)!c2</oc:id><oc:name>b.txt</oc:name>
+              <oc:file-parent>\(containerFileID)</oc:file-parent>
+              <d:resourcetype/><d:getetag>"e2"</d:getetag><d:getcontentlength>20</d:getcontentlength></d:prop>
+            <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+        </d:multistatus>
         """.utf8)
     }
 
-    func testGraphSourceFetchesAndMapsCollection() async throws {
-        let source = GraphEnumerationSource(
-            client: client(status: 200, body: graphBody(nextLink: "https://ocis.test/graph?$token=page2", deltaLink: nil)),
-            builder: GraphRequestBuilder(baseURL: URL(string: "https://ocis.test")!),
-            driveID: "drive-1",
-            itemID: "drive-1",
+    private func ocisSource(
+        containerPath: String,
+        containerFileID: String?,
+        body: Data,
+        status: Int = 207,
+        capture: ((URLRequest) -> Void)? = nil
+    ) -> OCISWebDAVEnumerationSource {
+        OCISWebDAVEnumerationSource(
+            client: client(status: status, body: body, capture: capture),
+            // The base is the `/dav/spaces` collection: ids are single segments
+            // under it, so the container path already carries the drive id.
+            builder: WebDAVRequestBuilder(filesBaseURL: URL(string: "https://ocis.test/dav/spaces")!),
+            containerPath: containerPath,
+            containerFileID: containerFileID,
+            driveID: Self.ocisDrive,
             authorization: "Bearer xyz"
         )
+    }
+
+    func testOCISSourcePropfindsTheSpaceRootAndMapsChildren() async throws {
+        var seen: URLRequest?
+        let source = ocisSource(
+            containerPath: "/\(Self.ocisDrive)",
+            containerFileID: nil,
+            body: ocisBody(containerFileID: Self.ocisRootFileID),
+            capture: { seen = $0 })
 
         let page = try await source.fetchPage(cursor: nil)
 
+        XCTAssertEqual(seen?.httpMethod, "PROPFIND")
+        XCTAssertEqual(seen?.value(forHTTPHeaderField: "Depth"), "1")
+        XCTAssertEqual(seen?.value(forHTTPHeaderField: "Authorization"), "Bearer xyz")
         XCTAssertEqual(page.items.map(\.filename), ["a.txt", "b.txt"])
-        XCTAssertEqual(page.nextCursor, PageCursor(rawValue: "page2"))
-        XCTAssertNil(page.anchor)  // only the delta (final) page carries the anchor
+        XCTAssertEqual(page.items.first?.identifier, ItemIdentifier(rawValue: "\(Self.ocisDrive)!c1"))
     }
 
-    func testGraphSourceFinalPageCarriesDeltaAnchor() async throws {
-        let source = GraphEnumerationSource(
-            client: client(status: 200, body: graphBody(nextLink: nil, deltaLink: "https://ocis.test/graph?$token=sync-9")),
-            builder: GraphRequestBuilder(baseURL: URL(string: "https://ocis.test")!),
-            driveID: "drive-1",
-            itemID: "drive-1",
-            authorization: "Bearer xyz"
-        )
+    func testOCISSourceSynthesizesAnAnchorAndHasASinglePage() async throws {
+        // No delta token over space WebDAV, exactly as Classic: one page, and an
+        // anchor synthesized from the listing so enumerateChanges can re-list.
+        let source = ocisSource(
+            containerPath: "/\(Self.ocisDrive)",
+            containerFileID: nil,
+            body: ocisBody(containerFileID: Self.ocisRootFileID))
 
         let page = try await source.fetchPage(cursor: nil)
 
         XCTAssertNil(page.nextCursor)
-        XCTAssertEqual(page.anchor, SyncAnchor(token: "sync-9"))
+        XCTAssertEqual(page.anchor, SyncAnchor(listing: page.items))
     }
 
-    func testGraphSourceFollowsCursorToDeltaEndpoint() async throws {
-        var seen: URLRequest?
-        let source = GraphEnumerationSource(
-            client: client(status: 200, body: graphBody(nextLink: nil, deltaLink: "https://ocis.test/graph?$token=done"), capture: { seen = $0 }),
-            builder: GraphRequestBuilder(baseURL: URL(string: "https://ocis.test")!),
-            driveID: "drive-1",
-            itemID: "drive-1",
-            authorization: "Bearer xyz"
-        )
+    func testOCISSourceDropsTheSubfolderSelfEntry() async throws {
+        let folderID = "\(Self.ocisDrive)!folder-1"
+        let source = ocisSource(
+            containerPath: "/\(folderID)",
+            containerFileID: folderID,
+            body: ocisBody(containerFileID: folderID))
 
-        _ = try await source.fetchPage(cursor: PageCursor(rawValue: "page2"))
+        let page = try await source.fetchPage(cursor: nil)
 
-        // A cursor drives the item's /delta endpoint (which also powers change tracking).
-        XCTAssertEqual(seen?.url?.absoluteString, "https://ocis.test/graph/v1.0/drives/drive-1/items/drive-1/delta?$token=page2")
-        XCTAssertEqual(seen?.value(forHTTPHeaderField: "Authorization"), "Bearer xyz")
+        XCTAssertEqual(page.items.map(\.filename), ["a.txt", "b.txt"])
+        XCTAssertFalse(page.items.contains { $0.identifier == ItemIdentifier(rawValue: folderID) })
+        XCTAssertEqual(page.items.first?.parentIdentifier, ItemIdentifier(rawValue: folderID))
+    }
+
+    func testOCISSourceThrowsClassifiedErrorOnFailureStatus() async {
+        let source = ocisSource(
+            containerPath: "/\(Self.ocisDrive)", containerFileID: nil, body: Data(), status: 401)
+        do {
+            _ = try await source.fetchPage(cursor: nil)
+            XCTFail("expected a thrown error")
+        } catch let error as RemoteError {
+            XCTAssertEqual(error, .authenticationRequired)
+        } catch {
+            XCTFail("expected RemoteError, got \(error)")
+        }
     }
 
     // MARK: - Async multi-page walk

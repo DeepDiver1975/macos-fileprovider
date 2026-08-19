@@ -109,19 +109,4 @@ public struct ChangeSet: Equatable, Sendable {
         deletedIdentifiers = old.map(\.identifier).filter { !newIDs.contains($0) }
     }
 
-    /// Build a change set from an oCIS Graph delta page, which carries live and
-    /// deleted items together (deleted ones flagged by the `deleted` facet).
-    public init(graphDelta items: [GraphItem]) {
-        var updated: [FileProviderItemDescription] = []
-        var deleted: [ItemIdentifier] = []
-        for item in items {
-            if item.isDeleted {
-                deleted.append(ItemIdentifier(rawValue: item.id))
-            } else {
-                updated.append(FileProviderItemDescription(graphItem: item))
-            }
-        }
-        updatedItems = updated
-        deletedIdentifiers = deleted
-    }
 }

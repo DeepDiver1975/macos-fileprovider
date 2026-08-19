@@ -85,6 +85,12 @@ public struct WebDAVRequestBuilder {
     /// The `PROPFIND` request body. Namespaced props mirror the parser's
     /// `(namespace, localName)` switch: DAV core plus the ownCloud extension
     /// props (`oc:id`, `oc:size`, `oc:permissions`, `oc:favorite`).
+    ///
+    /// One body serves both backends, as in `owncloud/client`
+    /// (`discoveryphase.cpp` requests an identical prop set with no backend
+    /// conditional). `oc:file-parent` and `oc:name` are oCIS-only and let it be
+    /// addressed purely by id; Classic simply omits them from the response, so
+    /// both parse as `nil` and the Classic mapping is unaffected (Task 4.5).
     static let propfindBody = """
     <?xml version="1.0" encoding="UTF-8"?>
     <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
@@ -98,6 +104,8 @@ public struct WebDAVRequestBuilder {
         <oc:size/>
         <oc:permissions/>
         <oc:favorite/>
+        <oc:file-parent/>
+        <oc:name/>
       </d:prop>
     </d:propfind>
     """

@@ -1,10 +1,12 @@
 import XCTest
 @testable import OwnCloudCore
 
-/// Tasks 4.1–4.4: the backend request construction behind the replicated
+/// Tasks 4.1–4.5: the backend request construction behind the replicated
 /// extension's content operations — hydration (`fetchContents`) and the push
-/// handlers (`createItem` / `modifyItem` / `deleteItem`), for both WebDAV
-/// (ownCloud Classic) and Graph (oCIS).
+/// handlers (`createItem` / `modifyItem` / `deleteItem`). Every one of them is a
+/// WebDAV request on both backends; the builder differs only in its base URL
+/// (Classic's files root, or an oCIS space's endpoint). Graph contributes the
+/// drive listing and nothing else.
 ///
 /// The `NSFileProviderReplicatedExtension` completion-handler contract and the
 /// actual byte streaming to/from disk are the Mac-only adapter; what the core
@@ -66,73 +68,13 @@ final class RemoteRequestBuilderTests: XCTestCase {
     }
 
     // MARK: - Graph (oCIS)
+    //
+    // Graph's only request is the drive listing (Task 4.5). The file-operation
+    // builders that used to be exercised here are gone: their endpoints 404 on
+    // oCIS 8.2.0, and all file/folder I/O now runs over each space's WebDAV
+    // endpoint — see `SpaceWebDAVEndpointTests` and `BackendConnectionTests`.
 
-    private let driveID = "1284d238$4c510ada"
     private var graph: GraphRequestBuilder { GraphRequestBuilder(baseURL: URL(string: "https://ocis.test")!) }
-
-    func testGraphFetchIsGetOnContentEndpoint() {
-        let req = graph.fetchContents(driveID: driveID, itemID: "1284d238$4c510ada!file")
-        XCTAssertEqual(req.method, .get)
-        XCTAssertEqual(
-            req.url,
-            URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/1284d238$4c510ada!file/content")
-        )
-    }
-
-    func testGraphModifyIsPutOnContentEndpoint() {
-        let req = graph.modifyContents(driveID: driveID, itemID: "x!f", ifMatchETag: "\"v2\"")
-        XCTAssertEqual(req.method, .put)
-        XCTAssertTrue(req.hasBody)
-        XCTAssertEqual(req.headers["If-Match"], "\"v2\"")
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f/content"))
-    }
-
-    func testGraphDeleteIsDeleteOnItem() {
-        let req = graph.delete(driveID: driveID, itemID: "x!f")
-        XCTAssertEqual(req.method, .delete)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f"))
-    }
-
-    func testGraphMetadataIsGetOnItemWithoutContentSuffix() {
-        // Single-item lookup (`item(for:)`) fetches the driveItem's metadata — a
-        // GET on the item itself, not on `/content`.
-        let req = graph.metadata(driveID: driveID, itemID: "x!f")
-        XCTAssertEqual(req.method, .get)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f"))
-    }
-
-    func testGraphCreateFolderPostsToParentChildren() {
-        let req = graph.createFolder(driveID: driveID, parentID: "x!root", name: "New Folder")
-        XCTAssertEqual(req.method, .post)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!root/children"))
-        XCTAssertTrue(req.hasBody)
-        XCTAssertEqual(req.headers["Content-Type"], "application/json")
-    }
-
-    func testGraphUploadNewFilePutsToParentPathContent() {
-        // A new file is uploaded by name under its parent via the `:/name:/content`
-        // path syntax; the response is the created driveItem the extension decodes.
-        let req = graph.uploadNewFile(driveID: driveID, parentID: "x!root", name: "new file.txt")
-        XCTAssertEqual(req.method, .put)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!root:/new%20file.txt:/content"))
-        XCTAssertTrue(req.hasBody)
-    }
-
-    func testGraphUploadNewFileUnderRootUsesRootSegment() {
-        // With no parent id the file lands in the drive root, addressed by the
-        // `root:/name:/content` syntax rather than `items/{id}`.
-        let req = graph.uploadNewFileUnderRoot(driveID: driveID, name: "note.txt")
-        XCTAssertEqual(req.method, .put)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/root:/note.txt:/content"))
-        XCTAssertTrue(req.hasBody)
-    }
-
-    func testGraphCreateFolderUnderRootPostsToRootChildren() {
-        let req = graph.createFolderUnderRoot(driveID: driveID, name: "New Folder")
-        XCTAssertEqual(req.method, .post)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/root/children"))
-        XCTAssertTrue(req.hasBody)
-    }
 
     func testGraphListDrivesIsGetOnMeDrives() {
         // Drive-id resolution at sign-in: list the user's drives to find the
@@ -141,28 +83,6 @@ final class RemoteRequestBuilderTests: XCTestCase {
         XCTAssertEqual(req.method, .get)
         XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/me/drives"))
         XCTAssertFalse(req.hasBody)
-    }
-
-    func testGraphMoveIsPatchWithNameAndParentReference() throws {
-        // Graph rename/move is a PATCH on the item carrying the new name and/or a
-        // new parentReference.id — the ID-addressed counterpart of WebDAV MOVE.
-        let req = graph.move(driveID: driveID, itemID: "x!f", newName: "renamed.txt", newParentID: "y!parent")
-        XCTAssertEqual(req.method, .patch)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/x!f"))
-        XCTAssertEqual(req.headers["Content-Type"], "application/json")
-        XCTAssertTrue(req.hasBody)
-        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: req.jsonBody ?? Data()) as? [String: Any])
-        XCTAssertEqual(json["name"] as? String, "renamed.txt")
-        let parentRef = try XCTUnwrap(json["parentReference"] as? [String: Any])
-        XCTAssertEqual(parentRef["id"] as? String, "y!parent")
-    }
-
-    func testGraphMoveOmitsParentReferenceForPureRename() throws {
-        // A rename in place carries only the name, no parentReference.
-        let req = graph.move(driveID: driveID, itemID: "x!f", newName: "renamed.txt", newParentID: nil)
-        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: req.jsonBody ?? Data()) as? [String: Any])
-        XCTAssertEqual(json["name"] as? String, "renamed.txt")
-        XCTAssertNil(json["parentReference"])
     }
 
     // MARK: - Enumeration requests (Phase 3)
@@ -215,37 +135,5 @@ final class RemoteRequestBuilderTests: XCTestCase {
         for prop in ["oc:id", "oc:size", "oc:permissions"] {
             XCTAssertTrue(body.contains(prop), "missing \(prop)")
         }
-    }
-
-    func testGraphEnumerateFirstPageIsGetOnItemChildren() {
-        // oCIS 8.2.0 does NOT implement the MS-Graph `/drives/{id}/root/children`
-        // shortcut — it 404s even with valid auth (proven live). Enumeration must be
-        // item-addressed: `/items/{itemID}/children`, where the root container's
-        // itemID is the drive's root id (which equals the driveID string). Verified
-        // live: `/items/{rootID}/children` → HTTP 200 with the listing.
-        let req = graph.enumerate(driveID: driveID, itemID: driveID, cursor: nil)
-        XCTAssertEqual(req.method, .get)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/1284d238$4c510ada/children"))
-        XCTAssertFalse(req.hasBody)
-    }
-
-    func testGraphEnumerateSubfolderTargetsItsItemChildren() {
-        // A subfolder enumerates its own item id's children — the same item-addressed
-        // form, so descending into folders works (Classic honours the container id;
-        // oCIS must too).
-        let req = graph.enumerate(driveID: driveID, itemID: "1284d238$4c510ada!folder", cursor: nil)
-        XCTAssertEqual(req.method, .get)
-        XCTAssertEqual(req.url, URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/1284d238$4c510ada!folder/children"))
-    }
-
-    func testGraphEnumerateWithCursorFollowsThePageToken() {
-        let req = graph.enumerate(driveID: driveID, itemID: driveID, cursor: PageCursor(rawValue: "abc123"))
-        XCTAssertEqual(req.method, .get)
-        // The cursor is the opaque $token carried by nextLink/deltaLink; kept
-        // item-addressed for consistency with the first page.
-        XCTAssertEqual(
-            req.url,
-            URL(string: "https://ocis.test/graph/v1.0/drives/1284d238$4c510ada/items/1284d238$4c510ada/delta?$token=abc123")
-        )
     }
 }

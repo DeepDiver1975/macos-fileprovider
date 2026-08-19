@@ -5,11 +5,18 @@ import Foundation
 /// enumeration sources, content fetch requests — with the backend difference
 /// encapsulated in one place (progress.md Phase 3–5).
 ///
-/// The one structural difference between the backends: ownCloud Classic is
-/// **path-addressed** (WebDAV under `remote.php/dav/files/{user}`), while oCIS is
-/// **ID-addressed** (Graph under `drives/{driveID}`, items by id). Everything
-/// above this seam works in terms of ``ItemIdentifier`` and ``RemoteRequest`` and
-/// does not care which backend is underneath.
+/// Both backends speak WebDAV; the one structural difference is how an item is
+/// addressed. ownCloud Classic is **path-addressed** (under
+/// `remote.php/dav/files/{user}`), while oCIS is **ID-addressed** (under the
+/// space's own `/dav/spaces/{driveID}`, items by `oc:id`). Everything above this
+/// seam works in terms of ``ItemIdentifier`` and ``RemoteRequest`` and does not
+/// care which backend is underneath.
+///
+/// oCIS uses Graph only to discover spaces (`me/drives`); all file and folder I/O
+/// goes over the space WebDAV endpoint, reusing the Classic request builder
+/// verbatim (Task 4.5). See ``SpaceWebDAVEndpoint`` for why — in short, oCIS
+/// 8.2.0 404s on the Graph content endpoints and answers every WebDAV verb, and
+/// `owncloud/client` is built the same way.
 public struct BackendConnection {
 
     public let account: AccountDescriptor
@@ -37,16 +44,36 @@ public struct BackendConnection {
         WebDAVRequestBuilder(filesBaseURL: webDAVFilesBaseURL)
     }
 
-    private var graphBuilder: GraphRequestBuilder {
-        GraphRequestBuilder(baseURL: account.serverURL)
+    /// The same WebDAV builder, rooted at oCIS's id-addressing collection
+    /// (`/dav/spaces`) instead of the Classic per-user files root. The builder
+    /// needs no change: only the base URL differs.
+    private var spaceWebDAVBuilder: WebDAVRequestBuilder {
+        WebDAVRequestBuilder(
+            filesBaseURL: SpaceWebDAVEndpoint.baseURL(
+                serverURL: account.serverURL,
+                driveID: driveID ?? ""
+            )
+        )
+    }
+
+    /// Address `identifier` under `/dav/spaces`: the drive id for the space root,
+    /// else the item's own `oc:id`.
+    private func spacePath(for identifier: ItemIdentifier) -> String {
+        SpaceWebDAVEndpoint.path(for: identifier, driveID: driveID ?? "")
+    }
+
+    /// Address a *new* item called `name` under the id-addressed `parent` — the one
+    /// place a name is needed, since an item that does not exist yet has no `oc:id`.
+    private func spaceChildPath(under parent: ItemIdentifier, name: String) -> String {
+        spacePath(for: parent) + "/" + name
     }
 
     // MARK: Enumeration
 
-    /// The enumeration source for a container. For the root container this lists
-    /// the backend's top level (WebDAV files root / Graph drive children); for a
-    /// subfolder the identifier carries the address (a path for WebDAV, an item id
-    /// for Graph — Graph subfolder enumeration is added with the item-lookup work).
+    /// The enumeration source for a container — a `PROPFIND Depth:1` either way.
+    /// For the root container this lists the backend's top level (the user's files
+    /// root / the space root); for a subfolder the identifier carries the address:
+    /// a server-relative path on Classic, an `oc:id` on oCIS.
     public func enumerationSource(for container: ItemIdentifier) -> RemoteEnumerationSource {
         switch account.backend {
         case .classic:
@@ -63,15 +90,15 @@ public struct BackendConnection {
                 authorization: authorization
             )
         case .ocis:
-            // Graph is item-addressed: the root container is the drive's root item
-            // (id == driveID); a subfolder's identifier is its own item id.
-            let drive = driveID ?? ""
-            let itemID = container == .rootContainer ? drive : container.rawValue
-            return GraphEnumerationSource(
+            // The space root is the WebDAV base itself; a subfolder is addressed by
+            // its own oc:id. Each item's parent comes from the server
+            // (`oc:file-parent`), so no parent identifier is threaded through.
+            return OCISWebDAVEnumerationSource(
                 client: client,
-                builder: graphBuilder,
-                driveID: drive,
-                itemID: itemID,
+                builder: spaceWebDAVBuilder,
+                containerPath: spacePath(for: container),
+                containerFileID: container == .rootContainer ? nil : container.rawValue,
+                driveID: driveID ?? "",
                 authorization: authorization
             )
         }
@@ -84,9 +111,9 @@ public struct BackendConnection {
         webDAVBuilder.fetchContents(path: path)
     }
 
-    /// Graph content fetch (oCIS): a GET on `/items/{id}/content`.
+    /// Space WebDAV content fetch (oCIS): a GET at the item's `oc:id`.
     public func fetchContentsRequest(itemID: String) -> RemoteRequest {
-        graphBuilder.fetchContents(driveID: driveID ?? "", itemID: itemID)
+        spaceWebDAVBuilder.fetchContents(path: spacePath(for: ItemIdentifier(rawValue: itemID)))
     }
 
     // MARK: Push operations — Classic (path-addressed)
@@ -139,61 +166,79 @@ public struct BackendConnection {
         return FileProviderItemDescription(webDAVItem: item, parentIdentifier: parentIdentifier)
     }
 
-    // MARK: Push operations — oCIS (ID-addressed)
+    // MARK: Push operations — oCIS (ID-addressed space WebDAV)
 
-    /// Graph content modify (oCIS): a PUT on `/items/{id}/content` with an
+    /// Space WebDAV content modify (oCIS): a PUT at the item's `oc:id` with an
     /// optional `If-Match` etag.
     public func modifyContentsRequest(itemID: String, ifMatchETag etag: String?) -> RemoteRequest {
-        graphBuilder.modifyContents(driveID: driveID ?? "", itemID: itemID, ifMatchETag: etag)
+        spaceWebDAVBuilder.modifyContents(
+            path: spacePath(for: ItemIdentifier(rawValue: itemID)),
+            ifMatchETag: etag
+        )
     }
 
-    /// Graph delete (oCIS): DELETE on `/items/{id}`.
+    /// Space WebDAV delete (oCIS): DELETE at the item's `oc:id`.
     public func deleteRequest(itemID: String) -> RemoteRequest {
-        graphBuilder.delete(driveID: driveID ?? "", itemID: itemID)
+        spaceWebDAVBuilder.delete(path: spacePath(for: ItemIdentifier(rawValue: itemID)))
     }
 
-    /// Graph single-item metadata (oCIS): GET on `/items/{id}` — the response is
-    /// one driveItem, decoded via `GraphJSONDecoder.decodeItem` for `item(for:)`.
+    /// Space WebDAV single-item metadata (oCIS): a `Depth:0` PROPFIND at the item's
+    /// `oc:id`. Because oCIS serves `oc:file-parent` and `oc:name`, this one request
+    /// yields identifier, parent and name together — everything `item(for:)` needs,
+    /// with no href parsing. Also the read-back after a write (see
+    /// ``readBackItem(fromOCISPropfind:)``).
     public func itemMetadataRequest(itemID: String) -> RemoteRequest {
-        graphBuilder.metadata(driveID: driveID ?? "", itemID: itemID)
+        spaceWebDAVBuilder.properties(path: spacePath(for: ItemIdentifier(rawValue: itemID)))
     }
 
-    /// Graph move/rename (oCIS): PATCH the item with a new name and, when moving
-    /// to a different container, the new `parentReference.id`. The ID-addressed
-    /// counterpart of Classic's ``moveRequest(fromPath:toPath:)``.
+    /// Space WebDAV move/rename (oCIS): MOVE the item addressed by `oc:id` to a
+    /// `Destination` formed from the new parent's `oc:id` and the new name. A `nil`
+    /// `newParentID` means "same container" (a pure rename).
+    ///
+    /// The Classic builder is reused unchanged — verified live on oCIS: MOVE by id
+    /// with an absolute `Destination` returns 201, the `oc:id` is unchanged
+    /// afterwards (across both rename and reparent), and `Overwrite: F` correctly
+    /// answers 412 on a collision.
     public func moveRequest(itemID: String, newName: String, newParentID: String?) -> RemoteRequest {
-        graphBuilder.move(driveID: driveID ?? "", itemID: itemID, newName: newName, newParentID: newParentID)
+        let parent = newParentID.map { ItemIdentifier(rawValue: $0) } ?? .rootContainer
+        return spaceWebDAVBuilder.move(
+            fromPath: spacePath(for: ItemIdentifier(rawValue: itemID)),
+            toPath: spaceChildPath(under: parent, name: newName)
+        )
     }
 
-    /// Graph folder create (oCIS): POST a folder driveItem to the parent's
-    /// `/children` collection.
-    public func createFolderRequest(parentID: String, name: String) -> RemoteRequest {
-        graphBuilder.createFolder(driveID: driveID ?? "", parentID: parentID, name: name)
-    }
-
-    /// Graph new-file upload (oCIS): PUT the bytes under the parent addressed by
-    /// name, returning the created driveItem for reconciliation.
-    public func uploadNewFileRequest(parentID: String, name: String) -> RemoteRequest {
-        graphBuilder.uploadNewFile(driveID: driveID ?? "", parentID: parentID, name: name)
-    }
-
-    /// Graph create (oCIS): shape the request for creating `name` under `parentID`,
-    /// making the two routing decisions in one place — root vs. a specific parent
-    /// (Graph addresses the drive root by its `root` segment, not `items/{id}`),
-    /// and folder (POST `/children`) vs. file (PUT `:/name:/content`). The `.put`
-    /// file request carries the bytes; the `.post` folder request carries JSON.
+    /// Space WebDAV create (oCIS): `MKCOL` for a folder, `PUT` for a file, at
+    /// `{parent oc:id}/{name}` — the space root being the base itself.
+    ///
+    /// Creation is the one name-based operation: a new item has no `oc:id` yet, so
+    /// it is addressed under its id-addressed parent by name. Neither verb returns
+    /// a body, so callers follow with ``itemMetadataRequest(itemID:)`` to learn the
+    /// server-assigned id and etag — the same read-back shape as Classic.
     public func createItemRequest(parentID: ItemIdentifier, name: String, isDirectory: Bool) -> RemoteRequest {
-        let drive = driveID ?? ""
-        let underRoot = parentID == .rootContainer
-        switch (isDirectory, underRoot) {
-        case (true, true):
-            return graphBuilder.createFolderUnderRoot(driveID: drive, name: name)
-        case (true, false):
-            return graphBuilder.createFolder(driveID: drive, parentID: parentID.rawValue, name: name)
-        case (false, true):
-            return graphBuilder.uploadNewFileUnderRoot(driveID: drive, name: name)
-        case (false, false):
-            return graphBuilder.uploadNewFile(driveID: drive, parentID: parentID.rawValue, name: name)
-        }
+        let path = spaceChildPath(under: parentID, name: name)
+        return isDirectory
+            ? spaceWebDAVBuilder.createDirectory(path: path)
+            : spaceWebDAVBuilder.createFile(path: path)
+    }
+
+    /// Space WebDAV read-back for a *just-created* item (oCIS): a `Depth:0` PROPFIND
+    /// at `{parent oc:id}/{name}` — the same address ``createItemRequest(parentID:name:isDirectory:)``
+    /// wrote to.
+    ///
+    /// This is the one read-back addressed by name rather than by id: the server
+    /// assigns the `oc:id`, so it is unknown until the item is read back. Every
+    /// later operation on the item uses ``itemMetadataRequest(itemID:)``.
+    public func readBackNewItemRequest(parentID: ItemIdentifier, name: String) -> RemoteRequest {
+        spaceWebDAVBuilder.properties(path: spaceChildPath(under: parentID, name: name))
+    }
+
+    /// Parse the single item from an oCIS read-back PROPFIND body. Unlike the
+    /// Classic counterpart no parent is passed in: oCIS reports it as
+    /// `oc:file-parent`. Returns `nil` if the multi-status has no entry — e.g. the
+    /// item vanished between the write and the read-back.
+    public func readBackItem(fromOCISPropfind body: Data) throws -> FileProviderItemDescription? {
+        let items = try WebDAVMultiStatusParser().parse(body)
+        guard let item = items.first else { return nil }
+        return FileProviderItemDescription(ocisWebDAVItem: item, driveID: driveID ?? "")
     }
 }

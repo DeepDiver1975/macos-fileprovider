@@ -9,9 +9,9 @@ import FoundationNetworking
 
 /// Debug-only oCIS counterpart of ``DevHarnessModel`` (progress.md Tasks 5.1 / 4.1
 /// / 4.2, oCIS legs). The Classic harness proves a path-addressed WebDAV domain in
-/// Finder; this one exercises the **ID-addressed** oCIS path the extension has never
-/// served live — `me/drives` → one domain per drive → Graph enumerate →
-/// `/items/{id}/content` download.
+/// Finder; this one exercises the **ID-addressed** oCIS path — `me/drives` → one
+/// domain per drive → `PROPFIND` Depth:1 on the space → `GET /dav/spaces/{oc:id}`.
+/// Graph's role ends at the drive listing (Task 4.5).
 ///
 /// Sign-in goes through the *production* ``OIDCSignInCoordinator`` and
 /// ``OCISSignInResolver``. The one injected seam is the `authorize` closure: instead
