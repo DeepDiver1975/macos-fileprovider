@@ -25,6 +25,21 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <!--
+      Issue #18: the ownCloud cloud mark, compiled by actool from the shared
+      Resources/Assets.xcassets. Both keys are written by hand because
+      GENERATE_INFOPLIST_FILE is NO — actool emits them into a partial plist that
+      is only merged into a *generated* Info.plist, never into a committed one, so
+      without them the bundle ships the icon but macOS never looks for it.
+      CFBundleIconName is what macOS 11+ reads; CFBundleIconFile is the older key,
+      kept because some surfaces (and `codesign`'s resource walk) still consult it.
+    -->
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 ownCloud GmbH</string>
     <key>LSMinimumSystemVersion</key>
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>LSApplicationCategoryType</key>

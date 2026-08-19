@@ -26,6 +26,15 @@
     <string>6.0</string>
     <key>CFBundleName</key>
     <string>$(PRODUCT_NAME)</string>
+    <!--
+      Issue #18 — see the FileProviderExtension Info.plist for why all three
+      bundles carry the icon and why this target also needs
+      ASSETCATALOG_COMPILER_APPICON_NAME set in project.yml.
+    -->
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>XPC!</string>
     <key>CFBundleShortVersionString</key>
