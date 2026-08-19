@@ -139,6 +139,15 @@ public final class SpaceCatalogCache {
         store.setData(try? JSONEncoder().encode(catalog), forKey: Self.key(for: accountIdentifier))
     }
 
+    /// Drop the cached catalog when the account is removed (issue #23). The mirror of
+    /// ``OIDCSessionStore/remove(forAccount:)``, and called beside it: account
+    /// identifiers are derived from server + username, so a later sign-in to the same
+    /// account would otherwise inherit this account's stale space list and render a
+    /// Spaces tab describing drives it never fetched.
+    public func remove(forAccount accountIdentifier: String) {
+        store.setData(nil, forKey: Self.key(for: accountIdentifier))
+    }
+
     private static func key(for accountIdentifier: String) -> String {
         "com.owncloud.macos.fileprovider.spaces.\(accountIdentifier)"
     }

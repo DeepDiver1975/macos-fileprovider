@@ -11,7 +11,7 @@ import XCTest
 /// Ordering the registry brackets the domain lifetime:
 ///   - on add: write the account record **before** adding the domain (a zero-space
 ///     account is legal, so the record can exist with no domains);
-///   - on sign-out: remove domains → delete credentials → delete the record **last**
+///   - on account removal: remove domains → delete credentials → delete the record **last**
 ///     (an orphan domain is detectable; a missing credential just reads as "signed out").
 final class DomainServiceTests: XCTestCase {
 
@@ -38,9 +38,9 @@ final class DomainServiceTests: XCTestCase {
         ])
     }
 
-    // MARK: - Sign out: domains → credentials → record last
+    // MARK: - Remove account: domains → credentials → record last
 
-    func testSignOutRemovesAllDomainsThenCredentialsThenRecordLast() async throws {
+    func testRemoveAccountRemovesAllDomainsThenCredentialsThenRecordLast() async throws {
         let f = Fixture()
         let personal = root(einstein, "personal")
         let project = root(einstein, "project")
@@ -48,7 +48,7 @@ final class DomainServiceTests: XCTestCase {
         try await f.service.addSpace(project, displayName: "Project")
         f.recorder.reset()
 
-        try await f.service.signOut(einstein, mode: .removeAll)
+        try await f.service.removeAccount(einstein, mode: .removeAll)
 
         // Both domains gone first, then the credential, then the record last.
         XCTAssertEqual(f.recorder.events, [
@@ -59,14 +59,14 @@ final class DomainServiceTests: XCTestCase {
         ])
     }
 
-    func testSignOutLeavesOtherAccountsUntouched() async throws {
+    func testRemoveAccountLeavesOtherAccountsUntouched() async throws {
         let f = Fixture()
         let einsteinRoot = root(einstein, "personal")
         let adminRoot = root(admin, nil)
         try await f.service.addSpace(einsteinRoot, displayName: "Personal")
         try await f.service.addSpace(adminRoot, displayName: "All files")
 
-        try await f.service.signOut(einstein, mode: .removeAll)
+        try await f.service.removeAccount(einstein, mode: .removeAll)
 
         let remaining = try await f.service.existingSyncRoots()
         XCTAssertEqual(remaining, [adminRoot])
