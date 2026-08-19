@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  File Provider extension entitlements for RELEASE builds (release automation).
+
+  Identical to FileProviderExtension.entitlements except that
+  com.apple.developer.fileprovider.testing-mode is deliberately ABSENT.
+
+  Two reasons, and the first is fatal rather than cosmetic:
+
+  1. testing-mode is a restricted entitlement. Apple grants it only through a
+     *development* provisioning profile, so a Developer ID profile — the kind a
+     notarized, publicly distributed build must use — does not include it, and
+     codesign fails with "provisioning profile doesn't include the
+     com.apple.developer.fileprovider.testing-mode entitlement".
+  2. It should not ship anyway. It exists so the acceptance suite can drive
+     NSFileProviderDomain.testingModes and waitForStabilization deterministically
+     (progress.md AC-3, Task 6.1); that is a developer capability, not a user one.
+
+  Everything else must stay identical to the Debug file: the app group and keychain
+  group are what let the containing app's sign-in hand credentials to the extension
+  (Tasks 2.5, 5.1), and network.client is what makes every WebDAV/Graph request
+  possible at all. Keep the two files in step when either changes.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)group.com.owncloud.macos.fileprovider</string>
+    </array>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.owncloud.macos.fileprovider.shared</string>
+    </array>
+</dict>
+</plist>

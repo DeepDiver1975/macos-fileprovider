@@ -16,12 +16,20 @@ options:
 
 settings:
   base:
+    # Development defaults. A tagged release overrides both on the xcodebuild
+    # command line (scripts/make-dmg.sh), which outranks these — that is how the
+    # tag reaches all three bundles, since every Info.plist here references
+    # $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION) rather than a literal.
     MARKETING_VERSION: "0.0.1"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: "4AP2STM4H5"
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: NO
+    # Required for notarization: the notary service rejects a submission whose
+    # executables are not built against the hardened runtime. Applied to every
+    # configuration so a Debug build cannot behave differently from what ships.
+    ENABLE_HARDENED_RUNTIME: YES
 
 packages:
   OwnCloudCore:
@@ -68,6 +76,14 @@ targets:
         PRODUCT_NAME: FileProviderExtension
         INFOPLIST_FILE: FileProviderExtension/SupportingFiles/Info.plist
         CODE_SIGN_ENTITLEMENTS: FileProviderExtension/SupportingFiles/FileProviderExtension.entitlements
+      configs:
+        # A shipped build must NOT carry com.apple.developer.fileprovider.testing-mode:
+        # it is a restricted entitlement granted only through a development
+        # provisioning profile, so a Developer ID profile does not include it and
+        # signing fails outright. It exists for the AC-3 deterministic test harness,
+        # which is a developer concern — hence the Release-only entitlements file.
+        Release:
+          CODE_SIGN_ENTITLEMENTS: FileProviderExtension/SupportingFiles/FileProviderExtension-Release.entitlements
     dependencies:
       - package: OwnCloudCore
       # The FileProviderItem / ItemEnumerator / RemoteError adapters the

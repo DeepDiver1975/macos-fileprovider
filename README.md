@@ -15,6 +15,16 @@ and `FileProviderUI` frameworks.
 Early stage — no implementation yet. The development plan, phase breakdown and
 task tracking live in [`progress.md`](progress.md).
 
+## Install
+
+Signed, notarized `.dmg` builds are published on the
+[releases page](../../releases) — drag the app to Applications. Each release also
+carries a `.sha256` file, so a download can be checked with
+`shasum -c ownCloud-File-Provider-*.dmg.sha256`.
+
+Releases are cut by pushing a `v*` tag; see
+[PROJECT.md → Releasing](PROJECT.md#releasing).
+
 ## Development
 
 Work follows a test-driven loop: each task starts with a failing unit test, then

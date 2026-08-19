@@ -9,6 +9,12 @@
 /// Marker giving the module a stable, importable symbol before the Phase 2
 /// types land. Lets the package build and its test target link from Task 1.1.
 public enum OwnCloudCore {
-    /// Semantic version of the core package.
+    /// Semantic version of this SPM package.
+    ///
+    /// Deliberately **not** shown in any UI. A release derives the app's version from
+    /// the git tag and stamps it into the three `Info.plist`s via `MARKETING_VERSION`
+    /// without rewriting Swift source, so this constant would sit at `0.0.1` inside a
+    /// `1.2.0` build. Version strings a user might report come from the bundles —
+    /// see `AboutInfo.appVersionDisplay`.
     public static let version = "0.0.1"
 }

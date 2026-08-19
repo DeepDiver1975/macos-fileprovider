@@ -24,6 +24,12 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 
+## Release artifacts — `make dmg` / `make notarize` write here (see PROJECT.md
+## "Releasing"). The .xcarchive, the exported app and the signed .dmg are all
+## rebuildable from a tag, and the notarized image is published on the GitHub
+## release rather than committed.
+dist/
+
 ## Playgrounds
 timeline.xctimeline
 playground.xcworkspace
