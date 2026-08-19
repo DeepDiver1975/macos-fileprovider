@@ -21,13 +21,21 @@ public struct OIDCTokenRequestBuilder {
     }
 
     /// A `grant_type=refresh_token` POST with an `application/x-www-form-urlencoded`
-    /// body. `scope` is included only when non-nil (RFC 6749 §6 makes it optional).
-    public func refresh(refreshToken: String, clientID: String, scope: String?) -> RemoteRequest {
+    /// body. `scope` is included only when non-nil (RFC 6749 §6 makes it optional),
+    /// and `clientSecret` only for a client registered with one — a secret-less
+    /// public client must not send an empty field.
+    public func refresh(refreshToken: String,
+                        clientID: String,
+                        clientSecret: String? = nil,
+                        scope: String?) -> RemoteRequest {
         var fields = [
             ("grant_type", "refresh_token"),
             ("refresh_token", refreshToken),
             ("client_id", clientID),
         ]
+        if let clientSecret {
+            fields.append(("client_secret", clientSecret))
+        }
         if let scope {
             fields.append(("scope", scope))
         }
@@ -37,15 +45,25 @@ public struct OIDCTokenRequestBuilder {
     /// A `grant_type=authorization_code` POST that redeems the code the browser
     /// handed back for tokens (RFC 6749 §4.1.3 + RFC 7636 §4.5). `code_verifier` is
     /// the PKCE secret proving this client began the flow; `redirect_uri` must match
-    /// the one sent to the authorization endpoint.
-    public func exchange(code: String, redirectURI: String, clientID: String, codeVerifier: String) -> RemoteRequest {
-        post([
+    /// the one sent to the authorization endpoint. `clientSecret` is sent only for a
+    /// client registered with one (oCIS's native clients are — see
+    /// ``OCISClientRegistration``); a public client must not send an empty field.
+    public func exchange(code: String,
+                         redirectURI: String,
+                         clientID: String,
+                         clientSecret: String? = nil,
+                         codeVerifier: String) -> RemoteRequest {
+        var fields = [
             ("grant_type", "authorization_code"),
             ("code", code),
             ("redirect_uri", redirectURI),
             ("client_id", clientID),
-            ("code_verifier", codeVerifier),
-        ])
+        ]
+        if let clientSecret {
+            fields.append(("client_secret", clientSecret))
+        }
+        fields.append(("code_verifier", codeVerifier))
+        return post(fields)
     }
 
     /// Shape a form-encoded POST to the token endpoint from ordered fields.

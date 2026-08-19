@@ -23,13 +23,16 @@ public enum OIDCRefreshHandler {
     public static func make(
         tokenEndpoint: URL,
         clientID: String,
+        clientSecret: String? = nil,
         scope: String?,
         now: @escaping () -> Date = Date.init,
         send: @escaping Send
     ) -> SessionManager.RefreshHandler {
         let builder = OIDCTokenRequestBuilder(tokenEndpoint: tokenEndpoint)
         return { refreshToken in
-            let request = builder.refresh(refreshToken: refreshToken, clientID: clientID, scope: scope)
+            let request = builder.refresh(
+                refreshToken: refreshToken, clientID: clientID,
+                clientSecret: clientSecret, scope: scope)
             let data = try send(request)
             return try OIDCTokenResponse.credentials(
                 from: data, now: now(), previousRefreshToken: refreshToken)

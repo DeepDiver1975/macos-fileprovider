@@ -8,6 +8,23 @@ public enum OCISSignInError: Error, Equatable {
     /// The `me/drives` listing was empty, so there is no space to sync and no domain
     /// could be created.
     case noSpaces
+    /// A ``SpaceSelection/personalOnly`` sign-in found no drive tagged
+    /// `driveType == "personal"` in the listing, so the one space it was asked to
+    /// mount does not exist.
+    case noPersonalSpace
+}
+
+/// Which of an account's spaces become sync roots (domains) at sign-in.
+///
+/// The settings UI signs in with ``personalOnly``: a user with a dozen project
+/// spaces should not have a dozen Finder sidebar entries appear unasked, and the
+/// others are opted into afterwards from the Spaces tab. The catalog always lists
+/// *every* space regardless, so that tab has something to offer.
+public enum SpaceSelection: Sendable, Equatable {
+    /// Only the drive tagged `driveType == "personal"`.
+    case personalOnly
+    /// Every drive in the listing, in listing order.
+    case all
 }
 
 /// The product of a successful oCIS sign-in resolution: the account identity, the
@@ -46,12 +63,34 @@ public enum OCISSignInResolver {
     ///   - credentials: the ``OIDCSignInCoordinator`` result; must be `.bearer`.
     ///   - idToken: the raw `id_token` JWT, parsed for the account name.
     ///   - drives: the `me/drives` listing (already fetched by the Mac layer).
-    /// - Throws: ``OCISSignInError`` on the wrong credential kind or no spaces, or
-    ///   ``OIDCIDTokenError`` if the `id_token` is unparseable.
+    ///   - spaces: which drives become sync roots. Defaults to ``SpaceSelection/all``;
+    ///     the settings UI passes ``SpaceSelection/personalOnly``.
+    /// - Throws: ``OCISSignInError`` on the wrong credential kind, no spaces, or a
+    ///   personal-only sign-in with no personal space; or ``OIDCIDTokenError`` if the
+    ///   `id_token` is unparseable.
     public static func resolve(serverURL: URL,
                                credentials: Credentials,
                                idToken: String,
-                               drives: [GraphDrive]) throws -> ResolvedOCISSignIn {
+                               drives: [GraphDrive],
+                               spaces: SpaceSelection = .all) throws -> ResolvedOCISSignIn {
+        try resolve(serverURL: serverURL,
+                    credentials: credentials,
+                    claims: try OIDCIDToken.claims(from: idToken),
+                    drives: drives,
+                    spaces: spaces)
+    }
+
+    /// Resolve from claims that have already been read — and, for oCIS, enriched from
+    /// the UserInfo endpoint (``OIDCIDToken/merging(_:userInfoJSON:)``).
+    ///
+    /// This is the primary entry point: Konnect's `id_token` carries only `sub`, so
+    /// naming the account from the JWT alone yields an opaque 80-character subject. The
+    /// `idToken:` overload above delegates here for callers with nothing to merge.
+    public static func resolve(serverURL: URL,
+                               credentials: Credentials,
+                               claims: OIDCIDTokenClaims,
+                               drives: [GraphDrive],
+                               spaces: SpaceSelection = .all) throws -> ResolvedOCISSignIn {
         guard case .bearer = credentials else {
             throw OCISSignInError.notBearerCredentials
         }
@@ -59,13 +98,26 @@ public enum OCISSignInResolver {
             throw OCISSignInError.noSpaces
         }
 
-        let claims = try OIDCIDToken.claims(from: idToken)
         let account = AccountDescriptor(backend: .ocis, serverURL: serverURL, username: claims.accountName)
 
-        // One sync root per drive, preserving listing order. An oCIS drive id never
-        // carries the reserved `|`, so `SyncRoot.init` never fails here — but drop
-        // any that somehow did rather than force-unwrapping.
-        let syncRoots = drives.compactMap { SyncRoot(account: account, driveID: $0.id) }
+        // Which drives to mount. `.personalOnly` needs the personal drive to exist —
+        // an empty selection would otherwise read as a successful sign-in with no
+        // domain, which is indistinguishable from a silent failure.
+        let selected: [GraphDrive]
+        switch spaces {
+        case .all:
+            selected = drives
+        case .personalOnly:
+            guard let personal = GraphDrive.personalDrive(in: drives) else {
+                throw OCISSignInError.noPersonalSpace
+            }
+            selected = [personal]
+        }
+
+        // One sync root per selected drive, preserving listing order. An oCIS drive id
+        // never carries the reserved `|`, so `SyncRoot.init` never fails here — but
+        // drop any that somehow did rather than force-unwrapping.
+        let syncRoots = selected.compactMap { SyncRoot(account: account, driveID: $0.id) }
 
         return ResolvedOCISSignIn(
             account: account,

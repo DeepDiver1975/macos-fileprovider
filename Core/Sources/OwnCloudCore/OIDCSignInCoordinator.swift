@@ -39,6 +39,7 @@ public struct OIDCSignInCoordinator {
     }
 
     private let clientID: String
+    private let clientSecret: String?
     private let redirectURI: String
     private let scope: String
     private let now: () -> Date
@@ -48,8 +49,13 @@ public struct OIDCSignInCoordinator {
     private let authorize: Authorize
     private let sendToken: SendToken
 
+    /// - Parameter clientSecret: the registered client's secret, or `nil` for a
+    ///   public client. oCIS's native registrations carry one (see
+    ///   ``OCISClientRegistration``); PKCE, not the secret, is what protects the
+    ///   exchange for an app that cannot keep secrets.
     public init(
         clientID: String,
+        clientSecret: String? = nil,
         redirectURI: String,
         scope: String,
         now: @escaping () -> Date = Date.init,
@@ -60,6 +66,7 @@ public struct OIDCSignInCoordinator {
         sendToken: @escaping SendToken
     ) {
         self.clientID = clientID
+        self.clientSecret = clientSecret
         self.redirectURI = redirectURI
         self.scope = scope
         self.now = now
@@ -92,7 +99,8 @@ public struct OIDCSignInCoordinator {
 
         let builder = OIDCTokenRequestBuilder(tokenEndpoint: configuration.tokenEndpoint)
         let exchange = builder.exchange(
-            code: code, redirectURI: redirectURI, clientID: clientID, codeVerifier: verifier)
+            code: code, redirectURI: redirectURI, clientID: clientID,
+            clientSecret: clientSecret, codeVerifier: verifier)
         let tokenData = try await sendToken(exchange)
 
         // A brand-new sign-in has no prior refresh token to retain.

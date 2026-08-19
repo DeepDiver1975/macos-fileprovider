@@ -123,6 +123,72 @@ final class OIDCIDTokenTests: XCTestCase {
         }
     }
 
+    // MARK: - UserInfo merge (issue #17)
+
+    /// The oCIS case, live-observed: Konnect's `id_token` carries **only** `sub`, while
+    /// its UserInfo response carries `preferred_username`. Without merging, every oCIS
+    /// account is named by an opaque 80-character subject. So UserInfo's claims win
+    /// where present (OIDC Core §5.3: claims may be returned there instead of in the
+    /// token).
+    func testUserInfoClaimsNameTheAccountWhenTheIDTokenOnlyHasSubject() throws {
+        let tokenClaims = try OIDCIDToken.claims(from: Self.makeIDToken(payload: ["sub": "u-0815"]))
+        let userInfo = Data(#"""
+        {"sub":"u-0815","preferred_username":"admin","email":"admin@example.org","name":"Admin"}
+        """#.utf8)
+
+        let merged = try OIDCIDToken.merging(tokenClaims, userInfoJSON: userInfo)
+
+        XCTAssertEqual(merged.subject, "u-0815")
+        XCTAssertEqual(merged.preferredUsername, "admin")
+        XCTAssertEqual(merged.email, "admin@example.org")
+        XCTAssertEqual(merged.accountName, "admin")
+    }
+
+    /// A UserInfo response whose `sub` differs from the `id_token`'s must be rejected
+    /// outright: OIDC Core §5.3.2 requires the subjects to match, and a mismatch means
+    /// the response describes a *different user* — so it must not rename this account.
+    func testRejectsUserInfoForADifferentSubject() throws {
+        let tokenClaims = try OIDCIDToken.claims(from: Self.makeIDToken(payload: ["sub": "u-0815"]))
+        let userInfo = Data(#"{"sub":"someone-else","preferred_username":"root"}"#.utf8)
+
+        XCTAssertThrowsError(try OIDCIDToken.merging(tokenClaims, userInfoJSON: userInfo)) { error in
+            XCTAssertEqual(error as? OIDCIDTokenError, .subjectMismatch)
+        }
+    }
+
+    /// UserInfo must not *erase* a claim the `id_token` already carried — a response
+    /// that omits `preferred_username` leaves the token's own value standing.
+    func testUserInfoOmissionsKeepTheIDTokensOwnClaims() throws {
+        let tokenClaims = try OIDCIDToken.claims(from: Self.makeIDToken(payload: [
+            "sub": "u-0815", "preferred_username": "einstein", "email": "einstein@ocis.test",
+        ]))
+
+        let merged = try OIDCIDToken.merging(tokenClaims, userInfoJSON: Data(#"{"sub":"u-0815"}"#.utf8))
+
+        XCTAssertEqual(merged.preferredUsername, "einstein")
+        XCTAssertEqual(merged.email, "einstein@ocis.test")
+    }
+
+    /// An unparseable UserInfo body is rejected rather than silently ignored, so the
+    /// caller decides whether to fall back — a sign-in must not quietly end up with a
+    /// worse name because a response was garbage.
+    func testRejectsMalformedUserInfoBody() throws {
+        let tokenClaims = try OIDCIDToken.claims(from: Self.makeIDToken(payload: ["sub": "u-0815"]))
+        XCTAssertThrowsError(try OIDCIDToken.merging(tokenClaims, userInfoJSON: Data("<html>".utf8))) { error in
+            XCTAssertEqual(error as? OIDCIDTokenError, .malformed)
+        }
+    }
+
+    /// A UserInfo response with no `sub` at all cannot be checked against the token's
+    /// subject, so it is rejected by the same §5.3.2 rule.
+    func testRejectsUserInfoWithoutSubject() throws {
+        let tokenClaims = try OIDCIDToken.claims(from: Self.makeIDToken(payload: ["sub": "u-0815"]))
+        let userInfo = Data(#"{"preferred_username":"admin"}"#.utf8)
+        XCTAssertThrowsError(try OIDCIDToken.merging(tokenClaims, userInfoJSON: userInfo)) { error in
+            XCTAssertEqual(error as? OIDCIDTokenError, .subjectMismatch)
+        }
+    }
+
     // MARK: - Helper
 
     /// Build a `header.payload.signature` JWT whose payload is `payload` as

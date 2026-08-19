@@ -18,11 +18,21 @@ public struct OIDCConfiguration: Equatable, Sendable {
     public let issuer: URL
     public let authorizationEndpoint: URL
     public let tokenEndpoint: URL
+    /// The `userinfo_endpoint`, when advertised. Optional in the spec but the only
+    /// place oCIS exposes a human-readable account name: Konnect's `id_token` carries
+    /// just `sub`, so ``OIDCIDToken/merging(_:userInfoJSON:)`` folds this response's
+    /// claims in (OIDC Core §5.3). `nil` when the server does not advertise it, in
+    /// which case the `id_token`'s own claims stand.
+    public let userInfoEndpoint: URL?
 
-    public init(issuer: URL, authorizationEndpoint: URL, tokenEndpoint: URL) {
+    public init(issuer: URL,
+                authorizationEndpoint: URL,
+                tokenEndpoint: URL,
+                userInfoEndpoint: URL? = nil) {
         self.issuer = issuer
         self.authorizationEndpoint = authorizationEndpoint
         self.tokenEndpoint = tokenEndpoint
+        self.userInfoEndpoint = userInfoEndpoint
     }
 
     /// Parse a discovery-document body. Throws
@@ -37,7 +47,12 @@ public struct OIDCConfiguration: Equatable, Sendable {
         else {
             throw OIDCConfigurationError.malformedDiscoveryDocument
         }
-        self.init(issuer: issuer, authorizationEndpoint: authorization, tokenEndpoint: token)
+        // `userinfo_endpoint` is optional: absent (or unparseable) leaves it nil rather
+        // than failing the whole document.
+        self.init(issuer: issuer,
+                  authorizationEndpoint: authorization,
+                  tokenEndpoint: token,
+                  userInfoEndpoint: Self.url(object["userinfo_endpoint"]))
     }
 
     private static func url(_ value: Any?) -> URL? {

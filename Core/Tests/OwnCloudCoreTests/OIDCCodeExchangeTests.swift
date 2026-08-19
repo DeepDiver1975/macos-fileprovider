@@ -28,5 +28,23 @@ final class OIDCCodeExchangeTests: XCTestCase {
         XCTAssertTrue(body.contains("code_verifier=verifier-123"), body)
         // Reserved characters in the code must be percent-encoded, not sent raw.
         XCTAssertTrue(body.contains("code=auth%20code%2F%2B%3D"), body)
+        // A secret-less client (oCIS `web`) must not send an empty client_secret.
+        XCTAssertFalse(body.contains("client_secret"), body)
+    }
+
+    /// Every oCIS-registered *native* client carries a secret, and lico's token
+    /// endpoint reads it as a plain form field (`client_secret`), so the exchange
+    /// must be able to carry one.
+    func testIncludesClientSecretWhenTheClientHasOne() {
+        let builder = OIDCTokenRequestBuilder(tokenEndpoint: tokenEndpoint)
+        let request = builder.exchange(
+            code: "c",
+            redirectURI: "oc://ios.owncloud.com",
+            clientID: "ios-client",
+            clientSecret: "sec/ret+",
+            codeVerifier: "v")
+
+        let body = String(data: request.jsonBody ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertTrue(body.contains("client_secret=sec%2Fret%2B"), body)
     }
 }

@@ -33,6 +33,8 @@ final class OIDCRefreshHandlerTests: XCTestCase {
         XCTAssertTrue(body.contains("grant_type=refresh_token"))
         XCTAssertTrue(body.contains("refresh_token=old-rt"))
         XCTAssertTrue(body.contains("client_id=web"))
+        // `web` has no secret; a secret-less client must not send an empty one.
+        XCTAssertFalse(body.contains("client_secret"), body)
 
         // expires_in (3600) is resolved against the injected now (t=1000).
         XCTAssertEqual(credentials, .bearer(
@@ -52,6 +54,24 @@ final class OIDCRefreshHandlerTests: XCTestCase {
         XCTAssertEqual(credentials, .bearer(
             accessToken: "at2", refreshToken: "keep-me",
             expiresAt: Date(timeIntervalSince1970: 100)))
+    }
+
+    /// The refresh grant for a native (secret-bearing) client must carry the secret
+    /// too, or lico rejects it — the same requirement as the initial exchange.
+    func testHandlerSendsClientSecretWhenConfigured() throws {
+        var sentRequest: RemoteRequest?
+        let handler = OIDCRefreshHandler.make(
+            tokenEndpoint: tokenEndpoint, clientID: "ios-client", clientSecret: "shh",
+            scope: nil,
+            now: { Date(timeIntervalSince1970: 0) },
+            send: { request in
+                sentRequest = request
+                return Data(#"{"access_token":"at","expires_in":1}"#.utf8)
+            })
+
+        _ = try handler("rt")
+        let body = String(data: sentRequest?.jsonBody ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertTrue(body.contains("client_secret=shh"), body)
     }
 
     func testHandlerThrowsOnMalformedResponse() {

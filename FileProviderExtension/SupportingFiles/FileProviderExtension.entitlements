@@ -8,7 +8,12 @@
     fails immediately.
   - application-groups + keychain-access-groups: let the containing app's sign-in
     flow and the extension share credentials (Tasks 2.5, 5.1, 5.2). Must be
-    provisioned up front. Replace "GROUPID" with the real team/group id.
+    provisioned up front.
+    The app group id MUST keep the $(AppIdentifierPrefix) prefix: an unprefixed
+    "group.…" id signs and provisions fine, but the sandbox then denies THIS
+    extension the container (the app still works — it created the directory), so
+    every app-group read returns nil with no error. That silently disabled oCIS
+    token refresh. Pinned by AppGroupIdentifierTests; see OwnCloudCore/AppGroup.swift.
   - fileprovider.testing-mode: needed by the Task 5.3 integration suite and the
     deterministic AC-3 path. Requires a provisioning profile from a PAID Apple
     Developer team (Task 6.1) — kept here but only usable once that is settled.
@@ -25,7 +30,7 @@
     <true/>
     <key>com.apple.security.application-groups</key>
     <array>
-        <string>group.com.owncloud.macos.fileprovider</string>
+        <string>$(AppIdentifierPrefix)group.com.owncloud.macos.fileprovider</string>
     </array>
     <key>keychain-access-groups</key>
     <array>

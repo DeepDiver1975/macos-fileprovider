@@ -2,16 +2,17 @@ import Foundation
 
 /// The minimal key-value seam the registry and space-catalog cache persist over
 /// (Task 7.3). In production this is backed by the app group `UserDefaults`
-/// (`group.com.owncloud.macos.fileprovider`); tests inject a fake. Kept to raw
-/// `Data` so the same seam serves both JSON payloads.
+/// (``AppGroup/identifier``); tests inject a fake. Kept to raw `Data` so the same
+/// seam serves both JSON payloads.
 public protocol KeyValueStore: AnyObject {
     func data(forKey key: String) -> Data?
     func setData(_ data: Data?, forKey key: String)
 }
 
 /// The production ``KeyValueStore``, backed by `UserDefaults`. Construct it with
-/// the app group suite (`UserDefaults(suiteName: "group.com.owncloud.macos.fileprovider")`)
-/// so the app and the extension share one registry.
+/// the app group suite (`UserDefaults(suiteName: AppGroup.identifier)`) so the app
+/// and the extension share one registry — the identifier must be the team-prefixed
+/// one, or the extension silently sees an empty suite (see ``AppGroup``).
 public final class UserDefaultsKeyValueStore: KeyValueStore {
     private let defaults: UserDefaults
 
