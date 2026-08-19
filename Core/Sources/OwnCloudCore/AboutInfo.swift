@@ -51,18 +51,25 @@ public struct AboutLink: Sendable, Equatable {
 
 public struct AboutInfo: Sendable, Equatable {
     public let applicationName: String
+    /// `"Version 1.2.3 (45)"` — the headline under the app name.
     public let versionSummary: String
+    /// `"1.2.3 (45)"` on its own, for surfaces that supply their own label (the
+    /// settings pane's `Version` row). Shared with ``versionSummary`` so the two can
+    /// never disagree about which build this is.
+    public let appVersionDisplay: String
     public let detailRows: [AboutDetailRow]
     public let copyright: String
     public let links: [AboutLink]
 
     public init(applicationName: String,
                 versionSummary: String,
+                appVersionDisplay: String,
                 detailRows: [AboutDetailRow],
                 copyright: String,
                 links: [AboutLink]) {
         self.applicationName = applicationName
         self.versionSummary = versionSummary
+        self.appVersionDisplay = appVersionDisplay
         self.detailRows = detailRows
         self.copyright = copyright
         self.links = links
@@ -118,9 +125,13 @@ public struct AboutInfo: Sendable, Equatable {
         }
 
         // The two extensions load out-of-process and can be stale relative to the
-        // app, so a bug report needs all three separately.
+        // app, so a bug report needs them separately from the version above.
+        //
+        // There is deliberately no row for `OwnCloudCore.version`: a release stamps
+        // its version into the three Info.plists via MARKETING_VERSION and never
+        // rewrites Swift source, so a row reading that constant would still say
+        // "0.0.1" in a 1.2.0 build and contradict every other number here.
         let rows = [
-            AboutDetailRow(label: "Core", value: OwnCloudCore.version),
             AboutDetailRow(label: "File Provider Extension",
                            value: versions.fileProviderExtension?.displayString ?? unavailableValue),
             AboutDetailRow(label: "File Provider UI Extension",
@@ -131,6 +142,7 @@ public struct AboutInfo: Sendable, Equatable {
         return AboutInfo(
             applicationName: applicationDisplayName,
             versionSummary: "Version \(appSummary)",
+            appVersionDisplay: appSummary,
             detailRows: rows,
             copyright: "© \(year) ownCloud GmbH",
             links: [

@@ -241,7 +241,10 @@ private struct AdvancedTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                LabeledContent("Version", value: OwnCloudCore.version)
+                // The running bundle's version, not the compiled-in package constant:
+                // a release stamps MARKETING_VERSION into the Info.plists and never
+                // touches Swift source, so the constant would freeze at 0.0.1.
+                LabeledContent("Version", value: AboutInfoReader.current().appVersionDisplay)
             }
         }
         .formStyle(.grouped)

@@ -36,13 +36,19 @@ final class AppGroupIdentifierTests: XCTestCase {
     /// declarations carry the variable rather than a hard-coded team id.
     private let entitlementsPrefix = "$(AppIdentifierPrefix)"
 
-    /// The three entitlements files must all request the **team-prefixed** group.
-    /// An unprefixed id here is the defect: it passes signing and denies the
-    /// extension at runtime.
+    /// Every entitlements file must request the **team-prefixed** group. An
+    /// unprefixed id here is the defect: it passes signing and denies the extension
+    /// at runtime.
+    ///
+    /// `FileProviderExtension-Release.entitlements` is in this list because it is the
+    /// one that *ships*: Release builds use it instead of the Debug file (see
+    /// `project.yml`'s `configs:` override). A regression there would reach users
+    /// while every Debug build kept working.
     func testEveryEntitlementsFileRequestsTheTeamPrefixedAppGroup() throws {
         for path in [
             "App/SupportingFiles/App.entitlements",
             "FileProviderExtension/SupportingFiles/FileProviderExtension.entitlements",
+            "FileProviderExtension/SupportingFiles/FileProviderExtension-Release.entitlements",
             "FileProviderUIExtension/SupportingFiles/FileProviderUIExtension.entitlements",
         ] {
             let contents = try Self.repoFile(path)

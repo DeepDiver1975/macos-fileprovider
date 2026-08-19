@@ -1,0 +1,196 @@
+# Tag-triggered release: build, sign, notarize and publish the macOS installer.
+#
+# Pushing `v1.2.0` stamps 1.2.0 into the app and both File Provider extensions,
+# builds a notarized .dmg and attaches it to a GitHub release. `v1.2.0-rc.1`
+# publishes a prerelease instead; scripts/release-version.sh owns that split,
+# because Apple rejects a suffix in CFBundleShortVersionString.
+#
+# The real work lives in scripts/make-dmg.sh and scripts/notarize.sh so the same
+# commands run on a developer Mac (progress.md AC-4 — no CI-only wiring). This file
+# only supplies credentials and publishes the result. Third-party actions are pinned
+# to full commit SHAs (AC-2); failing runs upload diagnostics (AC-6).
+#
+# Required repository secrets:
+#   MACOS_CERTIFICATE_P12       base64 of the "Developer ID Application" .p12
+#   MACOS_CERTIFICATE_PASSWORD  its export password
+#   KEYCHAIN_PASSWORD           any value; unlocks the temporary keychain
+#   APPLE_API_KEY_P8            base64 of the App Store Connect .p8 private key
+#   APPLE_API_KEY_ID            the key's ID
+#   APPLE_API_ISSUER_ID         the issuer UUID
+#
+# See PROJECT.md "Releasing".
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Needed by `gh release create`. Nothing else is granted.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, notarize and publish
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Seconds, and it runs before the five-minute archive: a parser regression
+      # would otherwise surface as a bundle stamped with the wrong version.
+      - name: Self-test the tag parser
+        run: make release-version-test
+
+      - name: Derive the version from the tag
+        id: version
+        run: ./scripts/release-version.sh "${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      # A release must not ship untested code. Same command as the CI unit tier.
+      - name: swift test (core package)
+        working-directory: Core
+        run: swift test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # A dedicated keychain rather than the login one: it is created empty, gets a
+      # known password, and is discarded with the runner, so nothing here can outlive
+      # the job or collide with whatever else the image ships with.
+      - name: Import the Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+
+          echo -n "$MACOS_CERTIFICATE_P12" | base64 --decode > "$certificate"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+
+          # -A is deliberately not used: -T limits access to the two tools that need
+          # the key, rather than granting it to every binary on the runner.
+          security import "$certificate" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$certificate"
+
+          # Without this, codesign blocks on a UI prompt that no one can answer and
+          # the job hangs until it times out.
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$keychain" >/dev/null
+
+          # xcodebuild and codesign only search the keychain list, so the new keychain
+          # has to be on it. The login keychain stays for anything else that needs it.
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          security default-keychain -s "$keychain"
+
+          echo "Signing identities available:"
+          security find-identity -v -p codesigning "$keychain"
+
+      - name: Write the App Store Connect API key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          # $RUNNER_TEMP, not the workspace: a key inside the checkout could be
+          # picked up by a later step or an artifact upload.
+          echo -n "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc-key.p8"
+          chmod 600 "$RUNNER_TEMP/asc-key.p8"
+
+      # The build number is the workflow run number, so CFBundleVersion always
+      # increases and the About window's "1.2.0 (147)" points at the run that
+      # produced the build.
+      - name: Build the signed .dmg
+        env:
+          VERSION: ${{ steps.version.outputs.marketing_version }}
+          ARTIFACT_VERSION: ${{ steps.version.outputs.full_version }}
+          BUILD: ${{ github.run_number }}
+          ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          export ASC_KEY_PATH="$RUNNER_TEMP/asc-key.p8"
+          ./scripts/make-dmg.sh
+
+      - name: Notarize and staple
+        env:
+          ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          export ASC_KEY_PATH="$RUNNER_TEMP/asc-key.p8"
+          ./scripts/notarize.sh
+
+      # Published alongside the image so a download can be checked without trusting
+      # the transport. The checksum file holds a bare filename, so `shasum -c` works
+      # in whatever directory a user downloads into.
+      - name: Checksum the artifact
+        id: artifact
+        run: |
+          set -euo pipefail
+          # The path make-dmg.sh actually wrote, not a second guess at its naming.
+          dmg_path="$(cat dist/artifact-path.txt)"
+          dmg="$(basename "$dmg_path")"
+          ( cd "$(dirname "$dmg_path")" && shasum -a 256 "$dmg" > "${dmg}.sha256" )
+          echo "dmg=$dmg_path" >> "$GITHUB_OUTPUT"
+          echo "checksum=${dmg_path}.sha256" >> "$GITHUB_OUTPUT"
+          cat "${dmg_path}.sha256"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ steps.version.outputs.is_prerelease }}
+          DMG: ${{ steps.artifact.outputs.dmg }}
+          CHECKSUM: ${{ steps.artifact.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          prerelease_flag=()
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            prerelease_flag=(--prerelease)
+          fi
+
+          # --generate-notes gives the commit-derived changelog; anything more
+          # curated is edited on the release afterwards (out of scope here).
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            "${prerelease_flag[@]}" \
+            "$DMG" "$CHECKSUM"
+
+      # AC-6. Build and notary failures are otherwise invisible: xcodebuild's real
+      # error is often buried, and a notary rejection's detail lives in a log the
+      # step's own output does not include.
+      - name: Collect diagnostics on failure (AC-6)
+        if: failure()
+        env:
+          ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          mkdir -p diagnostics
+          security find-identity -v -p codesigning > diagnostics/identities.txt 2>&1 || true
+          ls -lR dist > diagnostics/dist-listing.txt 2>&1 || true
+
+          # The most recent submission's log, whatever its verdict. Best-effort: the
+          # run may have failed long before anything was submitted.
+          if [[ -f "$RUNNER_TEMP/asc-key.p8" ]]; then
+            xcrun notarytool history \
+              --key "$RUNNER_TEMP/asc-key.p8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+              > diagnostics/notary-history.txt 2>&1 || true
+            submission="$(grep -m1 '  id: ' diagnostics/notary-history.txt | awk '{print $2}' || true)"
+            if [[ -n "$submission" ]]; then
+              xcrun notarytool log "$submission" \
+                --key "$RUNNER_TEMP/asc-key.p8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+                > diagnostics/notary-log.json 2>&1 || true
+            fi
+          fi
+
+      - name: Upload diagnostics (AC-6)
+        if: failure()
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        with:
+          name: release-diagnostics
+          path: diagnostics
