@@ -86,20 +86,6 @@ final class EnumerationTests: XCTestCase {
         XCTAssertEqual(changes.deletedIdentifiers, [ItemIdentifier(rawValue: "del")])
     }
 
-    func testChangeSetFromGraphDeltaMarksDeletedFacetAsDeletion() {
-        // A Graph delta page carries live + deleted items in one list.
-        let live = GraphItem(id: "live", name: "live.txt", size: 1, eTag: "\"1\"", lastModified: nil,
-                             isFolder: false, childCount: nil, mimeType: "text/plain",
-                             parentDriveID: "d", parentID: "d!root", isDeleted: false)
-        let dead = GraphItem(id: "dead", name: "dead.txt", size: nil, eTag: nil, lastModified: nil,
-                             isFolder: false, childCount: nil, mimeType: nil,
-                             parentDriveID: "d", parentID: "d!root", isDeleted: true)
-        let changes = ChangeSet(graphDelta: [live, dead])
-
-        XCTAssertEqual(changes.updatedItems.map(\.filename), ["live.txt"])
-        XCTAssertEqual(changes.deletedIdentifiers, [ItemIdentifier(rawValue: "dead")])
-    }
-
     // MARK: - Helpers
 
     private func desc(_ name: String, version: String? = nil) -> FileProviderItemDescription {

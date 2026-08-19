@@ -1,14 +1,15 @@
 import XCTest
 @testable import OwnCloudCore
 
-/// Task 2.3: oCIS Graph API JSON deserialization — drives, item (children)
-/// lists, and delta responses carrying a sync token.
+/// Task 2.3: oCIS Graph API JSON deserialization — the `me/drives` listing.
 ///
-/// oCIS implements the Microsoft Graph `driveItem` shape. Fixtures below mirror
-/// the bodies oCIS returns for:
-///   - GET /graph/v1.0/me/drives
-///   - GET /graph/v1.0/drives/{id}/root/children
-///   - GET /graph/v1.0/drives/{id}/root/delta
+/// Graph's only role is space discovery: it names the spaces and, per space,
+/// reports the `root.webDavUrl` that all file and folder I/O then runs over. The
+/// `driveItem` children/delta fixtures that used to live here went with the Graph
+/// file-operation layer (Task 4.5) — those endpoints 404 on oCIS 8.2.0, and items
+/// now arrive as WebDAV multi-status (see `WebDAVMultiStatusParserTests`).
+///
+/// Fixtures mirror the body oCIS returns for `GET /graph/v1.0/me/drives`.
 final class GraphModelsTests: XCTestCase {
 
     private let decoder = GraphJSONDecoder()
@@ -67,150 +68,5 @@ final class GraphModelsTests: XCTestCase {
             GraphDrive(id: "shares-id", name: "Shares", driveType: "virtual", driveAlias: nil, quota: nil, root: nil),
         ]
         XCTAssertNil(GraphDrive.personalDrive(in: drives))
-    }
-
-    // MARK: - Children list
-
-    func testDecodesChildrenList() throws {
-        let json = """
-        {
-          "value": [
-            {
-              "id": "1284d238$4c510ada!folderid",
-              "name": "Documents",
-              "size": 4096,
-              "eTag": "\\"d1a2b3c4\\"",
-              "lastModifiedDateTime": "2026-08-12T08:30:15Z",
-              "folder": { "childCount": 3 },
-              "parentReference": { "driveId": "1284d238$4c510ada", "id": "1284d238$4c510ada!root" }
-            },
-            {
-              "id": "1284d238$4c510ada!fileid",
-              "name": "notes.txt",
-              "size": 1024,
-              "eTag": "\\"a1b2c3d4\\"",
-              "lastModifiedDateTime": "2026-08-13T09:00:00Z",
-              "file": { "mimeType": "text/plain" },
-              "parentReference": { "driveId": "1284d238$4c510ada", "id": "1284d238$4c510ada!root" }
-            }
-          ]
-        }
-        """
-        let list = try decoder.decodeItemCollection(Data(json.utf8))
-
-        XCTAssertEqual(list.items.count, 2)
-        XCTAssertNil(list.deltaToken)
-
-        let folder = list.items[0]
-        XCTAssertEqual(folder.name, "Documents")
-        XCTAssertTrue(folder.isFolder)
-        XCTAssertEqual(folder.size, 4096)
-        XCTAssertEqual(folder.eTag, "\"d1a2b3c4\"")
-        XCTAssertNil(folder.mimeType)
-        XCTAssertEqual(folder.parentDriveID, "1284d238$4c510ada")
-        XCTAssertFalse(folder.isDeleted)
-
-        let file = list.items[1]
-        XCTAssertFalse(file.isFolder)
-        XCTAssertEqual(file.size, 1024)
-        XCTAssertEqual(file.mimeType, "text/plain")
-    }
-
-    func testDecodesLastModifiedDateTime() throws {
-        let json = """
-        { "value": [ { "id": "x", "name": "n", "lastModifiedDateTime": "2026-08-12T08:30:15Z", "file": {} } ] }
-        """
-        let list = try decoder.decodeItemCollection(Data(json.utf8))
-
-        var c = DateComponents()
-        c.year = 2026; c.month = 8; c.day = 12
-        c.hour = 8; c.minute = 30; c.second = 15
-        c.timeZone = TimeZone(identifier: "GMT")
-        let expected = Calendar(identifier: .gregorian).date(from: c)
-        XCTAssertEqual(list.items[0].lastModified, expected)
-    }
-
-    // MARK: - Delta with sync token
-
-    func testDecodesDeltaTokenFromDeltaLink() throws {
-        let json = """
-        {
-          "value": [ { "id": "a", "name": "kept.txt", "file": {} } ],
-          "@odata.deltaLink": "https://ocis.test/graph/v1.0/drives/1284d238/root/delta?$token=abc123token"
-        }
-        """
-        let list = try decoder.decodeItemCollection(Data(json.utf8))
-        XCTAssertEqual(list.deltaToken, "abc123token")
-        XCTAssertNil(list.nextToken)
-    }
-
-    func testDecodesNextTokenFromNextLink() throws {
-        let json = """
-        {
-          "value": [ { "id": "a", "name": "page1.txt", "file": {} } ],
-          "@odata.nextLink": "https://ocis.test/graph/v1.0/drives/1284d238/root/delta?$token=page2token"
-        }
-        """
-        let list = try decoder.decodeItemCollection(Data(json.utf8))
-        XCTAssertEqual(list.nextToken, "page2token")
-        XCTAssertNil(list.deltaToken)
-    }
-
-    func testDecodesDeletedItemInDelta() throws {
-        // In a delta response a removed item carries a `deleted` facet.
-        let json = """
-        {
-          "value": [
-            { "id": "gone", "name": "removed.txt", "deleted": { "state": "deleted" } }
-          ]
-        }
-        """
-        let list = try decoder.decodeItemCollection(Data(json.utf8))
-        XCTAssertTrue(list.items[0].isDeleted)
-    }
-
-    func testThrowsOnMalformedJSON() {
-        let garbage = Data("{ not json ".utf8)
-        XCTAssertThrowsError(try decoder.decodeItemCollection(garbage))
-    }
-
-    // MARK: Single driveItem (create / modify responses)
-
-    func testDecodesSingleItem() throws {
-        // A create/upload/modify response is a single driveItem object, not a
-        // `value` collection — the extension reconciles the created/modified item
-        // from it (server-assigned id, new eTag).
-        let json = """
-        {
-          "id": "srv-42", "name": "new.txt", "size": 5, "eTag": "\\"v2\\"",
-          "lastModifiedDateTime": "2026-08-17T10:00:00Z",
-          "file": { "mimeType": "text/plain" },
-          "parentReference": { "driveId": "drive-1", "id": "root" }
-        }
-        """
-        let item = try decoder.decodeItem(Data(json.utf8))
-
-        XCTAssertEqual(item.id, "srv-42")
-        XCTAssertEqual(item.name, "new.txt")
-        XCTAssertEqual(item.size, 5)
-        XCTAssertEqual(item.eTag, "\"v2\"")
-        XCTAssertFalse(item.isFolder)
-        XCTAssertEqual(item.mimeType, "text/plain")
-        XCTAssertEqual(item.parentID, "root")
-    }
-
-    func testDecodesSingleFolderItem() throws {
-        let json = """
-        { "id": "f-1", "name": "New Folder", "folder": { "childCount": 0 },
-          "parentReference": { "driveId": "drive-1", "id": "root" } }
-        """
-        let item = try decoder.decodeItem(Data(json.utf8))
-
-        XCTAssertEqual(item.id, "f-1")
-        XCTAssertTrue(item.isFolder)
-    }
-
-    func testDecodeSingleItemThrowsOnMalformedJSON() {
-        XCTAssertThrowsError(try decoder.decodeItem(Data("{ not json ".utf8)))
     }
 }

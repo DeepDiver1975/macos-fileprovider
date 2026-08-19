@@ -21,15 +21,30 @@ public extension EnumerationPage {
         )
     }
 
-    /// Build a page from an oCIS Graph item collection. `nextToken` (from
-    /// `@odata.nextLink`) becomes the cursor for the next page within this
-    /// enumeration; `deltaToken` (from `@odata.deltaLink`, present only on the
-    /// final page) becomes the sync anchor handed back once enumeration completes.
-    init(graphCollection: GraphItemCollection) {
+    /// Build a page from an oCIS space-WebDAV `PROPFIND Depth:1` listing
+    /// (Task 4.5). Like Classic, Depth:1 returns the container itself first — but
+    /// that entry is dropped by **`oc:id`**, not by href.
+    ///
+    /// Href comparison is not reliable here: oCIS echoes the request's own
+    /// percent-encoding back in the response href, so a container addressed as
+    /// `…/drive%21folder` comes back spelled that way while the same item listed
+    /// under its parent is spelled with a literal `!`. Matching on `oc:id` — which
+    /// every oCIS entry carries — is exact, and the container's id is already known
+    /// because it is what was requested.
+    ///
+    /// `containerFileID` is `nil` when enumerating the space root, whose `oc:id`
+    /// is not the bare driveID; ``SpaceWebDAVEndpoint/isRoot(fileID:driveID:)``
+    /// recognises it instead.
+    init(ocisWebDAVItems items: [WebDAVItem], containerFileID: String?, driveID: String) {
+        let children = items.filter { item in
+            guard let fileID = item.fileID else { return true }
+            if let containerFileID { return fileID != containerFileID }
+            return !SpaceWebDAVEndpoint.isRoot(fileID: fileID, driveID: driveID)
+        }
         self.init(
-            items: graphCollection.items.map(FileProviderItemDescription.init(graphItem:)),
-            nextCursor: graphCollection.nextToken.map(PageCursor.init(rawValue:)),
-            anchor: graphCollection.deltaToken.map(SyncAnchor.init(token:))
+            items: children.map { FileProviderItemDescription(ocisWebDAVItem: $0, driveID: driveID) },
+            nextCursor: nil,
+            anchor: nil
         )
     }
 

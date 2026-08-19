@@ -1,24 +1,16 @@
 import Foundation
 
-/// Decodes oCIS Graph API JSON bodies into the `Graph*` domain models.
+/// Decodes the one oCIS Graph JSON body this project reads: a `me/drives`
+/// listing.
 ///
-/// Uses `Codable` intermediate wire types (`Wire*`) that mirror the Graph
-/// `driveItem` shape, then flattens them to the provider-facing models. Kept
-/// Foundation-only for the AC-2 backend-contract tier.
+/// Uses `Codable` intermediate wire types (`Wire*`) that mirror the Graph `drive`
+/// shape, then flattens them to the provider-facing models. Kept Foundation-only
+/// for the AC-2 backend-contract tier. The `driveItem` decoders were removed with
+/// the Graph file-operation layer (Task 4.5) — items now arrive as WebDAV
+/// multi-status and are parsed by ``WebDAVMultiStatusParser``.
 public struct GraphJSONDecoder {
 
     public init() {}
-
-    // ISO 8601 with fractional-second tolerance (Graph sometimes emits them).
-    private static func parseDate(_ string: String?) -> Date? {
-        guard let string else { return nil }
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = withFraction.date(from: string) { return d }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: string)
-    }
 
     public func decodeDriveList(_ data: Data) throws -> [GraphDrive] {
         let wire = try JSONDecoder().decode(WireCollection<WireDrive>.self, from: data)
@@ -34,65 +26,20 @@ public struct GraphJSONDecoder {
         }
     }
 
-    public func decodeItemCollection(_ data: Data) throws -> GraphItemCollection {
-        let wire = try JSONDecoder().decode(WireCollection<WireItem>.self, from: data)
-        return GraphItemCollection(
-            items: wire.value.map(Self.item(from:)),
-            deltaToken: Self.token(fromLink: wire.deltaLink),
-            nextToken: Self.token(fromLink: wire.nextLink)
-        )
-    }
-
-    /// Decode a single Graph `driveItem` — the shape a create / upload / modify
-    /// response returns (one object, not a `value` collection). The extension
-    /// reconciles the created or modified item from this (server-assigned id, new
-    /// eTag) before handing it back to the system.
-    public func decodeItem(_ data: Data) throws -> GraphItem {
-        let wire = try JSONDecoder().decode(WireItem.self, from: data)
-        return Self.item(from: wire)
-    }
-
-    private static func item(from i: WireItem) -> GraphItem {
-        GraphItem(
-            id: i.id,
-            name: i.name ?? "",
-            size: i.size,
-            eTag: i.eTag,
-            lastModified: parseDate(i.lastModifiedDateTime),
-            isFolder: i.folder != nil,
-            childCount: i.folder?.childCount,
-            mimeType: i.file?.mimeType,
-            parentDriveID: i.parentReference?.driveId,
-            parentID: i.parentReference?.id,
-            isDeleted: i.deleted != nil
-        )
-    }
-
-    /// Extracts the `$token` query value from an `@odata.deltaLink` / `nextLink`.
-    private static func token(fromLink link: String?) -> String? {
-        guard let link, let components = URLComponents(string: link) else { return nil }
-        return components.queryItems?.first(where: { $0.name == "$token" })?.value
-    }
 }
 
 // MARK: - Wire types (mirror the Graph JSON exactly)
 
 private struct WireCollection<Element: Decodable>: Decodable {
     let value: [Element]
-    let deltaLink: String?
-    let nextLink: String?
 
     enum CodingKeys: String, CodingKey {
         case value
-        case deltaLink = "@odata.deltaLink"
-        case nextLink = "@odata.nextLink"
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         value = try c.decodeIfPresent([Element].self, forKey: .value) ?? []
-        deltaLink = try c.decodeIfPresent(String.self, forKey: .deltaLink)
-        nextLink = try c.decodeIfPresent(String.self, forKey: .nextLink)
     }
 }
 
@@ -115,33 +62,4 @@ private struct WireQuota: Decodable {
 private struct WireDriveRoot: Decodable {
     let id: String?
     let webDavUrl: String?
-}
-
-private struct WireItem: Decodable {
-    let id: String
-    let name: String?
-    let size: Int?
-    let eTag: String?
-    let lastModifiedDateTime: String?
-    let folder: WireFolderFacet?
-    let file: WireFileFacet?
-    let deleted: WireDeletedFacet?
-    let parentReference: WireParentReference?
-}
-
-private struct WireFolderFacet: Decodable {
-    let childCount: Int?
-}
-
-private struct WireFileFacet: Decodable {
-    let mimeType: String?
-}
-
-private struct WireDeletedFacet: Decodable {
-    let state: String?
-}
-
-private struct WireParentReference: Decodable {
-    let driveId: String?
-    let id: String?
 }

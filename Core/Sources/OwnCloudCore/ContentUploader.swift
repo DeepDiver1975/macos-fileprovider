@@ -26,10 +26,11 @@ public struct ContentUploader {
         _ = try await uploadReturningBody(request, fromFile: fileURL, authorization: authorization)
     }
 
-    /// Like ``upload(_:fromFile:authorization:)`` but returns the response body —
-    /// oCIS answers a create/modify with the resulting `driveItem` JSON, which the
-    /// extension decodes (``GraphJSONDecoder/decodeItem(_:)``) to reconcile the
-    /// server-assigned id and new eTag. Same failure mapping.
+    /// Like ``upload(_:fromFile:authorization:)`` but returns the response body, for
+    /// callers that need whatever the server answered. Both backends now write over
+    /// WebDAV, where a `PUT` returns no metadata body, so create/modify follow up
+    /// with a `Depth:0` PROPFIND read-back instead of reading this (Task 4.5). Same
+    /// failure mapping.
     @discardableResult
     public func uploadReturningBody(_ request: RemoteRequest, fromFile fileURL: URL, authorization: String?) async throws -> Data {
         let body = try Data(contentsOf: fileURL)
