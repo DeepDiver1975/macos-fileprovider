@@ -29,6 +29,18 @@ final class SettingsModel: ObservableObject {
     @Published var pendingRemoval: SpaceRemovalPrompt?
     private var pendingRemovalRoot: SyncRoot?
 
+    /// The in-flight account-removal confirmation, if any (issue #26). Deliberately
+    /// separate from `pendingRemoval`: the two prompts can be raised from different
+    /// places and say different things, and sharing one slot would let a space
+    /// deselect answer an account removal.
+    @Published var pendingAccountRemoval: AccountRemovalPrompt?
+    private var pendingAccountRemovalTarget: AccountDescriptor?
+
+    /// The last account-removal failure. Removal used to swallow its errors, which
+    /// left the row in the sidebar with no explanation — indistinguishable from the
+    /// capability being missing, which is how issue #26 presented.
+    @Published var accountRemovalError: String?
+
     /// The last "Add Account" failure, shown inline in the sign-in sheet. `nil`
     /// clears the message; a successful sign-in dismisses the sheet instead.
     @Published var addAccountError: String?
@@ -183,13 +195,64 @@ final class SettingsModel: ObservableObject {
 
     // MARK: - Account actions
 
-    func confirmSignOut(_ account: AccountDescriptor) {
+    /// Raise the account-removal confirmation (issue #26). Removal is destructive and
+    /// wider than a space deselect, so it is never applied on the click that asks for
+    /// it — the prompt states what goes and the user picks what happens to the
+    /// already-downloaded files.
+    func presentAccountRemoval(_ account: AccountDescriptor) {
+        accountRemovalError = nil
+        pendingAccountRemovalTarget = account
+        pendingAccountRemoval = AccountRemovalPrompt.make(
+            accountName: account.displayName,
+            spaceCount: existingRoots.filter {
+                $0.account.accountIdentifier == account.accountIdentifier
+            }.count,
+            // Same best-effort limitation as `downloadedBytes(for:)`: measuring the
+            // materialised size needs the domain's on-disk URL, which is fetched
+            // asynchronously, and the prompt is built synchronously. A 0 drops the
+            // size clause rather than naming a wrong number.
+            downloadedBytes: 0)
+    }
+
+    var isAccountRemovalPromptPresented: Binding<Bool> {
+        Binding(
+            get: { self.pendingAccountRemoval != nil },
+            set: { if !$0 { self.pendingAccountRemoval = nil } }
+        )
+    }
+
+    func cancelAccountRemoval() {
+        pendingAccountRemoval = nil
+        pendingAccountRemovalTarget = nil
+    }
+
+    /// Apply a confirmed account removal.
+    ///
+    /// The service owns the crash-safe ordering (domains → credential → registry
+    /// record last). What it cannot own is the per-account app-group state it never
+    /// wrote: the OIDC refresh parameters and the cached space catalog. Both are
+    /// keyed by `accountIdentifier`, which is derived from server + username, so
+    /// leaving either behind lets a later sign-in to the same account inherit stale
+    /// data — the catalog case was issue #23.
+    func resolveAccountRemoval(_ choice: DomainRemovalChoice) {
+        guard let account = pendingAccountRemovalTarget else { return }
+        pendingAccountRemoval = nil
+        pendingAccountRemovalTarget = nil
         Task {
-            try? await service.signOut(account, mode: .preserveDownloadedUserData)
-            // The service deletes the Keychain item and the registry record; the OIDC
-            // refresh parameters are ours to drop, and leaving them would let a later
-            // sign-in to the same account inherit stale ones.
+            do {
+                try await service.removeAccount(account, mode: choice)
+            } catch {
+                // Surfaced rather than swallowed: a failed removal leaves the row in
+                // place, and without a message that reads as the feature not working.
+                accountRemovalError = Self.removalFailureMessage(error)
+                await reload()
+                return
+            }
             sessionStore.remove(forAccount: account.accountIdentifier)
+            catalogCache.remove(forAccount: account.accountIdentifier)
+            // Drop a selection that now points at nothing, so `reload()` re-selects
+            // the first surviving account instead of showing an empty detail pane.
+            if selectedAccountID == account.accountIdentifier { selectedAccountID = nil }
             await reload()
         }
     }
@@ -421,6 +484,10 @@ final class SettingsModel: ObservableObject {
 
     private static func domainAddFailureMessage(_ error: Error) -> String {
         "Could not add the account’s file provider domain: " + error.localizedDescription
+    }
+
+    private static func removalFailureMessage(_ error: Error) -> String {
+        "Could not remove the account: " + error.localizedDescription
     }
 
     /// A user-facing sentence for an oCIS sign-in failure. A cancelled browser sheet

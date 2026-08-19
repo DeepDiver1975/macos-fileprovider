@@ -87,18 +87,65 @@ public struct SpaceRemovalPrompt: Sendable, Equatable {
     }
 
     public static func make(spaceName: String, downloadedBytes: Int) -> SpaceRemovalPrompt {
-        let keepLabel: String
-        if downloadedBytes > 0 {
-            keepLabel = "Keep the \(humanizedBytes(downloadedBytes)) already downloaded"
-        } else {
-            keepLabel = "Keep the downloaded files"
-        }
-        return SpaceRemovalPrompt(
+        SpaceRemovalPrompt(
             message: "Stop syncing “\(spaceName)”?",
-            keepChoice: SpaceRemovalOption(label: keepLabel, choice: .preserveDownloadedUserData),
+            keepChoice: SpaceRemovalOption(label: keepLabel(downloadedBytes: downloadedBytes),
+                                          choice: .preserveDownloadedUserData),
             removeChoice: SpaceRemovalOption(label: "Remove them", choice: .removeAll)
         )
     }
+}
+
+/// The confirmation shown when a user removes an account (issue #26).
+///
+/// Deliberately a distinct type from ``SpaceRemovalPrompt`` rather than a reuse of
+/// it: removing an account is a wider action than deselecting one space — it drops
+/// the stored credential and *every* one of the account's spaces at once — so the
+/// wording has to state that, and a shared type would blur the two dialogs the user
+/// sees. The keep/remove choices are the same pair, because the question about
+/// already-downloaded files is the same question.
+public struct AccountRemovalPrompt: Sendable, Equatable {
+    public let message: String
+    /// The consequence, spelled out: how many spaces stop syncing and that the
+    /// stored credential goes.
+    public let detail: String
+    public let keepChoice: SpaceRemovalOption
+    public let removeChoice: SpaceRemovalOption
+
+    public init(message: String, detail: String,
+                keepChoice: SpaceRemovalOption, removeChoice: SpaceRemovalOption) {
+        self.message = message
+        self.detail = detail
+        self.keepChoice = keepChoice
+        self.removeChoice = removeChoice
+    }
+
+    public static func make(accountName: String,
+                            spaceCount: Int,
+                            downloadedBytes: Int) -> AccountRemovalPrompt {
+        // A zero-space account is legal — that is the whole reason `AccountRegistry`
+        // exists — so the space clause is dropped rather than claiming "0 spaces".
+        let spaceClause: String
+        switch spaceCount {
+        case 0: spaceClause = ""
+        case 1: spaceClause = "This stops syncing 1 space. "
+        default: spaceClause = "This stops syncing \(spaceCount) spaces. "
+        }
+        return AccountRemovalPrompt(
+            message: "Remove the account “\(accountName)”?",
+            detail: spaceClause + "You will need to sign in again to use it.",
+            keepChoice: SpaceRemovalOption(label: keepLabel(downloadedBytes: downloadedBytes),
+                                          choice: .preserveDownloadedUserData),
+            removeChoice: SpaceRemovalOption(label: "Remove them", choice: .removeAll)
+        )
+    }
+}
+
+/// The keep-choice label shared by both removal prompts: name the concrete amount
+/// when it is known, otherwise drop the size clause rather than saying "0 bytes".
+func keepLabel(downloadedBytes: Int) -> String {
+    guard downloadedBytes > 0 else { return "Keep the downloaded files" }
+    return "Keep the \(humanizedBytes(downloadedBytes)) already downloaded"
 }
 
 /// Whether the domain is blocked by the System Settings > General > Login Items &

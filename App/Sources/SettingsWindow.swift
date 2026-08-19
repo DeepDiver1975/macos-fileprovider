@@ -26,18 +26,56 @@ struct SettingsWindow: View {
                         .foregroundStyle(.secondary)
                 }
                 .tag(account.accountIdentifier)
+                // Issue #26: removal is a sidebar action, where the accounts are.
+                // Right-clicking the row acts on *that* row, not on the selection.
+                .contextMenu {
+                    Button("Remove Account…", role: .destructive) {
+                        model.presentAccountRemoval(account)
+                    }
+                }
             }
             .navigationSplitViewColumnWidth(min: 200, ideal: 240)
             .safeAreaInset(edge: .bottom) {
-                Button {
-                    model.beginAddAccount()
-                    isAddingAccount = true
-                } label: {
-                    Label("Add Account…", systemImage: "plus")
+                HStack(spacing: 4) {
+                    Button {
+                        model.beginAddAccount()
+                        isAddingAccount = true
+                    } label: {
+                        Label("Add Account…", systemImage: "plus")
+                    }
+                    // The counterpart "Add Account…" never had, so removal is
+                    // discoverable without knowing to right-click.
+                    Button {
+                        if let account = model.selectedAccount {
+                            model.presentAccountRemoval(account)
+                        }
+                    } label: {
+                        Label("Remove Account", systemImage: "minus")
+                    }
+                    .labelStyle(.iconOnly)
+                    .disabled(model.selectedAccount == nil)
+                    .help("Remove the selected account")
+                    Spacer()
                 }
                 .buttonStyle(.borderless)
                 .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .confirmationDialog(
+                model.pendingAccountRemoval?.message ?? "",
+                isPresented: model.isAccountRemovalPromptPresented,
+                titleVisibility: .visible
+            ) {
+                if let prompt = model.pendingAccountRemoval {
+                    Button(prompt.keepChoice.label) {
+                        model.resolveAccountRemoval(prompt.keepChoice.choice)
+                    }
+                    Button(prompt.removeChoice.label, role: .destructive) {
+                        model.resolveAccountRemoval(prompt.removeChoice.choice)
+                    }
+                    Button("Cancel", role: .cancel) { model.cancelAccountRemoval() }
+                }
+            } message: {
+                if let prompt = model.pendingAccountRemoval { Text(prompt.detail) }
             }
         } detail: {
             if let account = model.selectedAccount {
@@ -180,7 +218,18 @@ private struct AccountTab: View {
             }
 
             Section {
-                Button("Sign Out…", role: .destructive) { model.confirmSignOut(account) }
+                // Same prompt the sidebar raises — one confirmed path, not two
+                // behaviours. Was "Sign Out…", which understated that the account is
+                // deleted outright and removed on the first click (issue #26).
+                Button("Remove Account…", role: .destructive) {
+                    model.presentAccountRemoval(account)
+                }
+                if let error = model.accountRemovalError {
+                    Text(error)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .formStyle(.grouped)

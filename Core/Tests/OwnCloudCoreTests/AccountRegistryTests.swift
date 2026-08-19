@@ -98,6 +98,37 @@ final class AccountRegistryTests: XCTestCase {
         let cache = SpaceCatalogCache(store: InMemoryKeyValueStore())
         XCTAssertNil(cache.catalog(forAccount: "never-cached"))
     }
+
+    /// Issue #23: removing an account dropped its credential, its registry record
+    /// and its OIDC session record, but the catalog blob had no way to be dropped at
+    /// all — so a later sign-in to the same identifier inherited a stale catalog.
+    func testSpaceCatalogCacheRemoveDropsTheBlob() {
+        let store = InMemoryKeyValueStore()
+        let cache = SpaceCatalogCache(store: store)
+        cache.store(.classic, forAccount: einstein.accountIdentifier)
+
+        cache.remove(forAccount: einstein.accountIdentifier)
+
+        XCTAssertNil(SpaceCatalogCache(store: store).catalog(forAccount: einstein.accountIdentifier))
+    }
+
+    func testSpaceCatalogCacheRemoveLeavesOtherAccountsAlone() {
+        let store = InMemoryKeyValueStore()
+        let cache = SpaceCatalogCache(store: store)
+        cache.store(.classic, forAccount: einstein.accountIdentifier)
+        cache.store(.classic, forAccount: admin.accountIdentifier)
+
+        cache.remove(forAccount: einstein.accountIdentifier)
+
+        XCTAssertNil(cache.catalog(forAccount: einstein.accountIdentifier))
+        XCTAssertEqual(cache.catalog(forAccount: admin.accountIdentifier), .classic)
+    }
+
+    func testSpaceCatalogCacheRemoveOfAnUncachedAccountIsANoOp() {
+        let cache = SpaceCatalogCache(store: InMemoryKeyValueStore())
+        cache.remove(forAccount: "never-cached")
+        XCTAssertNil(cache.catalog(forAccount: "never-cached"))
+    }
 }
 
 /// A test double for the ``KeyValueStore`` seam.

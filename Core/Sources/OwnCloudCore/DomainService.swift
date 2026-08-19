@@ -11,7 +11,7 @@ public protocol DomainManaging: Sendable {
     func remove(_ syncRoot: SyncRoot, mode: DomainRemovalChoice) async throws
 }
 
-/// Per-account credential deletion (the Keychain item). Its own seam so sign-out
+/// Per-account credential deletion (the Keychain item). Its own seam so removal
 /// ordering — domains, *then* credentials, *then* record — is testable.
 public protocol CredentialDeleting: Sendable {
     func deleteCredentials(forAccount accountIdentifier: String) async throws
@@ -36,7 +36,7 @@ public enum SingleInstanceError: Error, Equatable {
 ///   - **add**: write the account record *before* adding the domain, so a
 ///     zero-space account is representable and a crash mid-add leaves at worst a
 ///     record with no domain (harmless — it just means "known, no spaces");
-///   - **sign-out**: remove domains → delete credentials → delete the record
+///   - **account removal**: remove domains → delete credentials → delete the record
 ///     *last*, so a crash leaves at worst an orphan domain (detectable) or a
 ///     missing credential (reads as "signed out"), never a record pointing at a
 ///     domain whose credential is gone.
@@ -78,9 +78,15 @@ public final class DomainService {
         try await domainManager.remove(syncRoot, mode: mode)
     }
 
-    /// Sign an account out entirely: remove every one of its domains, then delete
-    /// its credential, then delete its record last.
-    public func signOut(_ account: AccountDescriptor, mode: DomainRemovalChoice) async throws {
+    /// Remove an account entirely: remove every one of its domains, then delete its
+    /// credential, then delete its record last.
+    ///
+    /// Named for what it does. This was `signOut`, which understated it — deleting
+    /// the registry record makes the account *gone*, not merely signed out, and the
+    /// settings window's button inherited that wording and read as if removal were
+    /// unavailable (issue #26). Callers must also drop the per-account app-group
+    /// blobs the registry doesn't own (``OIDCSessionStore``, ``SpaceCatalogCache``).
+    public func removeAccount(_ account: AccountDescriptor, mode: DomainRemovalChoice) async throws {
         let mine = try await domainManager.existingSyncRoots()
             .filter { $0.account.accountIdentifier == account.accountIdentifier }
         for syncRoot in mine {
