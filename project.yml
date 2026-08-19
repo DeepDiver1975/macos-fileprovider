@@ -33,6 +33,10 @@ targets:
     platform: macOS
     sources:
       - App/Sources
+      # The shared app icon (issue #18). All three bundles reference the same
+      # catalog; the app target picks up ASSETCATALOG_COMPILER_APPICON_NAME
+      # automatically, the two extensions below must set it explicitly.
+      - Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.owncloud.macos.fileprovider
@@ -53,8 +57,13 @@ targets:
     platform: macOS
     sources:
       - FileProviderExtension/Sources
+      - Resources/Assets.xcassets
     settings:
       base:
+        # REQUIRED on an app-extension target: unlike the app target, an .appex
+        # does not get this for free, and without it actool produces nothing —
+        # the .appex ships with an empty Contents/Resources and no icon at all.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.owncloud.macos.fileprovider.FileProvider
         PRODUCT_NAME: FileProviderExtension
         INFOPLIST_FILE: FileProviderExtension/SupportingFiles/Info.plist
@@ -71,8 +80,11 @@ targets:
     platform: macOS
     sources:
       - FileProviderUIExtension/Sources
+      - Resources/Assets.xcassets
     settings:
       base:
+        # See the FileProviderExtension target above — an .appex needs this set.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.owncloud.macos.fileprovider.FileProviderUI
         PRODUCT_NAME: FileProviderUIExtension
         INFOPLIST_FILE: FileProviderUIExtension/SupportingFiles/Info.plist

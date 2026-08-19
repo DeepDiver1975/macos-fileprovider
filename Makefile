@@ -7,6 +7,7 @@
 #   make up   BACKEND=classic|ocis           # just start a fixture
 #   make down BACKEND=classic|ocis           # just stop it
 #   make install                             # build + sign the app, install to ~/Applications
+#   make icons                               # regenerate the app icon from the ownCloud logo
 #
 # BACKEND selects the fixture; it defaults to classic.
 
@@ -23,7 +24,7 @@ BUILT_APP    = $(DERIVED_DATA)/Build/Products/Debug/$(APP_NAME)
 INSTALL_DIR  ?= $(HOME)/Applications
 INSTALLED_APP = $(INSTALL_DIR)/$(APP_NAME)
 
-.PHONY: unit backend-contract up down wait clean install
+.PHONY: unit backend-contract up down wait clean install icons
 
 unit:
 	cd Core && swift test
@@ -58,6 +59,13 @@ wait:
 clean:
 	-$(MAKE) down BACKEND=classic
 	-$(MAKE) down BACKEND=ocis
+
+# Regenerate Resources/Assets.xcassets/AppIcon.appiconset from the committed
+# ownCloud logo SVG (issue #18). The generated PNGs are committed, so this is a
+# manual step, not a build dependency — a clean `git diff` after running it
+# confirms the checked-in icons are current. See Resources/Icon/README.md.
+icons:
+	swift Resources/Icon/make-icon.swift
 
 # Build + sign the app (both .appex embedded) and install it to an Applications
 # folder (defaults to ~/Applications) so macOS discovers the File Provider

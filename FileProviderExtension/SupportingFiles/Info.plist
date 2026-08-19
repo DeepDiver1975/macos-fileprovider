@@ -26,6 +26,17 @@
     <string>6.0</string>
     <key>CFBundleName</key>
     <string>$(PRODUCT_NAME)</string>
+    <!--
+      Issue #18. Which bundle macOS reads for the Finder sidebar's sync-root icon
+      is undocumented, so the app and both extensions all carry the same icon from
+      the shared Resources/Assets.xcassets. This target additionally needs
+      ASSETCATALOG_COMPILER_APPICON_NAME in project.yml — an .appex does not get
+      that setting for free the way the app target does.
+    -->
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>XPC!</string>
     <key>CFBundleShortVersionString</key>

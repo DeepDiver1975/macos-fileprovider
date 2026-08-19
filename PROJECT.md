@@ -32,6 +32,23 @@ The App target **embeds** both `.appex` targets in `Contents/PlugIns` (Xcode:
 "Frameworks, Libraries, and Embedded Content" → Embed Without Signing is wrong
 here; use the extension's own signing).
 
+## Shared app icon (issue #18)
+
+All three targets list the same `Resources/Assets.xcassets` in their `sources:`,
+so the ownCloud cloud mark ships in the app bundle **and** in both `.appex`
+bundles — which bundle macOS reads for a sync root's Finder icon is undocumented,
+so covering all three removes the guess.
+
+The `AppIcon.appiconset` PNGs are generated and committed; regenerate them with
+
+```sh
+make icons                   # swift Resources/Icon/make-icon.swift
+```
+
+which rasterizes the committed upstream logo. `Resources/Icon/README.md` records
+the artwork's provenance and the two non-obvious wiring details (see
+[Build settings that matter](#build-settings-that-matter)).
+
 ## Shared core
 
 All three targets depend on the local SPM package **`OwnCloudCore`** (`Core/`),
@@ -55,6 +72,14 @@ Docker on `ubuntu-latest` in CI (see `progress.md` AC-2, backend-contract tier).
 - App group `group.com.owncloud.macos.fileprovider` and keychain group
   `<AppIdentifierPrefix>com.owncloud.macos.fileprovider.shared` on all three
   targets (see the `.entitlements` files).
+- `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` on the **two extension** targets.
+  An app target gets this for free; an extension target does not, and without it
+  `actool` runs but the `.appex` ships an empty `Contents/Resources` — no icon,
+  no error.
+- `CFBundleIconName` / `CFBundleIconFile` = `AppIcon` written explicitly into all
+  three `Info.plist`s. `GENERATE_INFOPLIST_FILE = NO` here, so `actool`'s partial
+  plist is never merged and the keys would otherwise be absent.
+- `NSHumanReadableCopyright` on the App target (Finder's Get Info reads it).
 
 ## Test harness (Task 1.4)
 

@@ -10,6 +10,7 @@ import OwnCloudCore
 @main
 struct OwnCloudFileProviderApp: App {
     @StateObject private var model = SettingsModel()
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup {
@@ -28,6 +29,22 @@ struct OwnCloudFileProviderApp: App {
                 #endif
         }
         .windowResizability(.contentSize)
+        // Issue #18: point the standard About item at our own window, which reports
+        // the embedded extension versions the stock panel cannot show.
+        .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About \(AboutInfo.applicationDisplayName)") {
+                    openWindow(id: Self.aboutWindowID)
+                }
+            }
+        }
+
+        Window("About \(AboutInfo.applicationDisplayName)", id: Self.aboutWindowID) {
+            // Read at presentation time so the window always reflects the running
+            // bundles rather than a value captured at launch.
+            AboutWindow(info: AboutInfoReader.current())
+        }
+        .windowResizability(.contentSize)
 
         #if DEBUG
         // Local end-to-end testing stand-in for the sign-in and domain registration
@@ -40,4 +57,6 @@ struct OwnCloudFileProviderApp: App {
         }
         #endif
     }
+
+    private static let aboutWindowID = "about"
 }
