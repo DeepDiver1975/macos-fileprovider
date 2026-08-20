@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Export options for `xcodebuild -exportArchive` (release automation).
+
+  `developer-id` is the distribution method for a notarized app shipped outside the
+  Mac App Store. Its important side effect is that the export re-signs the two
+  embedded .appex bundles with the Developer ID identity as well — copying the .app
+  out of the archive by hand would leave them signed for development and fail
+  notarization.
+
+  Automatic signing lets xcodebuild mint the three Developer ID provisioning profiles
+  (app + two extensions) on demand, which is what makes an unattended CI release
+  possible; the App Store Connect API key is passed on the command line by
+  scripts/make-dmg.sh rather than stored here.
+-->
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>developer-id</string>
+    <key>teamID</key>
+    <string>4AP2STM4H5</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <!-- Notarization is a separate, explicit step (scripts/notarize.sh) so the
+         staple order can be controlled: the .app is stapled before the .dmg is
+         built around it. -->
+    <key>manageAppVersionAndBuildNumber</key>
+    <false/>
+</dict>
+</plist>

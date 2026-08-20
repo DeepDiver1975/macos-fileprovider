@@ -40,7 +40,6 @@ final class AboutInfoTests: XCTestCase {
         // A bug report needs to distinguish the app from the two extensions, which
         // load out-of-process and can be stale relative to it.
         let rows = Dictionary(uniqueKeysWithValues: about.detailRows.map { ($0.label, $0.value) })
-        XCTAssertEqual(rows["Core"], OwnCloudCore.version)
         XCTAssertEqual(rows["File Provider Extension"], "1.2.3 (45)")
         XCTAssertEqual(rows["File Provider UI Extension"], "1.2.3 (45)")
         XCTAssertEqual(rows["macOS"], "26.0")
@@ -50,7 +49,19 @@ final class AboutInfoTests: XCTestCase {
         let about = AboutInfo.make(versions: bundled, osVersion: "26.0", year: 2026)
 
         XCTAssertEqual(about.detailRows.map(\.label),
-                       ["Core", "File Provider Extension", "File Provider UI Extension", "macOS"])
+                       ["File Provider Extension", "File Provider UI Extension", "macOS"])
+    }
+
+    /// The rendered rows describe the *running bundles*. A row sourced from a
+    /// hardcoded Swift constant cannot, because a release stamps its version into the
+    /// Info.plists via MARKETING_VERSION and never touches the source — so at v1.2.0
+    /// such a row would still read the compiled-in value and quietly contradict the
+    /// version directly above it.
+    func testNoRowIsSourcedFromTheCompiledInPackageVersion() {
+        let about = AboutInfo.make(versions: bundled, osVersion: "26.0", year: 2026)
+
+        XCTAssertFalse(about.detailRows.contains { $0.value == OwnCloudCore.version },
+                       "no About row may report the hardcoded package version: \(about.detailRows)")
     }
 
     /// An extension bundle that cannot be read must degrade to a legible
@@ -69,8 +80,32 @@ final class AboutInfoTests: XCTestCase {
         let rows = Dictionary(uniqueKeysWithValues: about.detailRows.map { ($0.label, $0.value) })
         XCTAssertEqual(rows["File Provider Extension"], AboutInfo.unavailableValue)
         // The row is still present, and the readable sibling is unaffected.
-        XCTAssertEqual(about.detailRows.count, 4)
+        XCTAssertEqual(about.detailRows.count, 3)
         XCTAssertEqual(rows["File Provider UI Extension"], "1.2.3 (45)")
+    }
+
+    // MARK: - App version for other surfaces
+
+    /// The settings pane shows a bare version too, and it has to be the same number
+    /// the About window and the release artifact carry — so it comes from here rather
+    /// than from a second source that could drift.
+    func testAppVersionDisplayMatchesWhatTheBundleReports() {
+        let about = AboutInfo.make(versions: bundled, osVersion: "26.0", year: 2026)
+
+        XCTAssertEqual(about.appVersionDisplay, "1.2.3 (45)")
+        // Same value the summary renders, minus the "Version " prefix.
+        XCTAssertEqual(about.versionSummary, "Version \(about.appVersionDisplay)")
+    }
+
+    func testAppVersionDisplayFallsBackWhenTheBundleIsUnreadable() {
+        let unknown = AboutInfo.BundleVersions(
+            appVersion: nil, appBuild: nil,
+            fileProviderExtension: nil, fileProviderUIExtension: nil
+        )
+
+        let about = AboutInfo.make(versions: unknown, osVersion: "26.0", year: 2026)
+
+        XCTAssertEqual(about.appVersionDisplay, AboutInfo.unavailableValue)
     }
 
     // MARK: - Version formatting

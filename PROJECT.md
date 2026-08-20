@@ -25,7 +25,7 @@ The generated `.xcodeproj` is git-ignored; regenerate it after editing
 | Target | Type | Sources | Info.plist | Entitlements |
 |---|---|---|---|---|
 | `App` | macOS App | `App/Sources/` | `App/SupportingFiles/Info.plist` | `App/SupportingFiles/App.entitlements` |
-| `FileProviderExtension` | File Provider Extension (`.appex`) | `FileProviderExtension/Sources/` | `FileProviderExtension/SupportingFiles/Info.plist` | `FileProviderExtension/SupportingFiles/FileProviderExtension.entitlements` |
+| `FileProviderExtension` | File Provider Extension (`.appex`) | `FileProviderExtension/Sources/` | `FileProviderExtension/SupportingFiles/Info.plist` | `FileProviderExtension.entitlements` (Debug) / `FileProviderExtension-Release.entitlements` (Release) — see [Releasing](#releasing) |
 | `FileProviderUIExtension` | File Provider UI Extension (`.appex`) | `FileProviderUIExtension/Sources/` | `FileProviderUIExtension/SupportingFiles/Info.plist` | `FileProviderUIExtension/SupportingFiles/FileProviderUIExtension.entitlements` |
 
 The App target **embeds** both `.appex` targets in `Contents/PlugIns` (Xcode:
@@ -80,6 +80,206 @@ Docker on `ubuntu-latest` in CI (see `progress.md` AC-2, backend-contract tier).
   three `Info.plist`s. `GENERATE_INFOPLIST_FILE = NO` here, so `actool`'s partial
   plist is never merged and the keys would otherwise be absent.
 - `NSHumanReadableCopyright` on the App target (Finder's Get Info reads it).
+- `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` are development defaults
+  (`0.0.1` / `1`). A release overrides both on the `xcodebuild` command line — see
+  [Releasing](#releasing).
+- `ENABLE_HARDENED_RUNTIME = YES` on every target. Required for notarization; the
+  notary service rejects a submission whose executables were built without it.
+
+## Releasing
+
+Pushing a `v*` tag builds a signed, notarized `.dmg` and publishes it as a GitHub
+release (`.github/workflows/release.yml`).
+
+### Tag convention
+
+| Tag | `CFBundleShortVersionString` | Release |
+|---|---|---|
+| `v1.2.0` | `1.2.0` | normal release |
+| `v1.2.0-rc.1` | `1.2.0` | **pre**release, titled `v1.2.0-rc.1` |
+
+Apple accepts only one to three dot-separated integers in
+`CFBundleShortVersionString`, so a prerelease suffix cannot reach the bundle: the
+numeric core stamps the bundles while the full tag names the release and the
+artifact. `scripts/release-version.sh` owns that split and is tested —
+`make release-version-test` — because it is the one piece of release logic with
+real edge cases. A malformed tag fails the run rather than shipping a bundle
+whose version is empty.
+
+`CFBundleVersion` is the workflow run number, so the About window's `1.2.0 (147)`
+identifies the CI run that produced the build.
+
+### How the version reaches all three bundles
+
+All three `Info.plist`s reference `$(MARKETING_VERSION)` and
+`$(CURRENT_PROJECT_VERSION)` rather than literals, and command-line build settings
+outrank project settings — so one
+
+```sh
+xcodebuild … MARKETING_VERSION=1.2.0 CURRENT_PROJECT_VERSION=147
+```
+
+stamps the app and both extensions. `scripts/make-dmg.sh` then **asserts** the
+result in all three `Info.plist`s and fails the build on a mismatch: the
+extensions are separate targets, so a settings mistake could stamp the app and
+miss them, and the About window would report versions that disagree.
+
+### Two things that had to change before a release was possible
+
+1. **`ENABLE_HARDENED_RUNTIME`** was set nowhere. Notarization rejects a
+   submission without it, so every release would have failed at the notary step.
+2. **`com.apple.developer.fileprovider.testing-mode`** is a *restricted*
+   entitlement that Apple grants only through a development provisioning profile.
+   A Developer ID profile does not carry it and signing fails outright, so
+   Release builds use `FileProviderExtension-Release.entitlements` — the same file
+   minus that key. Correct regardless of signing: the entitlement exists so the
+   acceptance suite can drive `NSFileProviderDomain.testingModes`
+   deterministically (`progress.md` AC-3), which is a developer capability, not a
+   user one. **Keep the two entitlements files in step when either changes.**
+   `make-dmg.sh` verifies the shipped extension has the app sandbox and app group
+   but *not* testing-mode; the first two are a positive control, so a dump that
+   silently failed cannot be mistaken for a stripped entitlement.
+   `AppGroupIdentifierTests` reads the Release file too, because it is the one that
+   ships: a bare `group.…` id there would deny the extension its container in
+   released builds only, while every Debug build kept working, and
+   `ReleaseEntitlementsTests` asserts the whole declaration — see
+   [Continuous installer builds](#continuous-installer-builds).
+
+### Continuous installer builds
+
+A release path that only ever runs on a tag runs for the first time when it matters
+most. So the installer is built continuously, split by the one thing that actually
+divides it — whether a step needs credentials:
+
+| Tier | Where | Trigger | Needs secrets | Proves |
+|---|---|---|---|---|
+| Unsigned smoke | `ci.yml` → `installer` | every PR + push to `main` | no | the Release configuration builds, the version reaches all three bundles, packaging works |
+| Signed + notarized | `release.yml` | every tag; pushes to `main` once enabled | yes | export, Developer ID signing, both notary submissions, stapling, `gh release create` |
+
+The unsigned tier runs `make dmg SIGNING=none`, which needs no certificate, no
+provisioning profile and no App Store Connect key — so it also works on a fork PR,
+where secrets are unavailable however the repository is configured, and on a
+developer Mac with no Xcode account. It builds with `VERSION=0.0.0` and the run
+number as the build, so an About window reading `0.0.0 (1234)` says plainly that
+this is not a release while still naming the run that produced it. `SIGNING=none`
+skips three steps and prints why for each: `-exportArchive` (nothing to re-sign, and
+it needs the profiles that are missing), the entitlements check, and signing the
+image.
+
+The entitlements check is the interesting omission. `make-dmg.sh` reads the shipped
+`.appex`'s entitlements out of its **code signature**, and an unsigned bundle is
+ad-hoc (linker-signed): `codesign -d --entitlements` then exits `0` and writes no
+file at all. So the check cannot pass unsigned, and letting it fail would report
+"the entitlements did not survive export" about a build that was never signed.
+`ReleaseEntitlementsTests` covers the *declarations* instead — both files parsed
+with `PropertyListSerialization`, the Release file without testing-mode, the Debug
+file with it as a positive control, and `project.yml` mapping the Release config to
+the Release file. The two are complementary: a unit test cannot prove what codesign
+applied, and the artifact check cannot run without credentials.
+
+Pushing to `main` also publishes a rolling `main-latest` prerelease, deleted and
+recreated each time (`gh release delete … --cleanup-tag`), so `gh release create`
+is exercised too. It cannot re-trigger the workflow — the tag filter is `v*`. Gated
+on the `RELEASE_SIGNING_ENABLED` repository variable, because until the secrets
+exist an unconditional signed job would fail on every push; a variable rather than
+a secret because `vars` can be read in a job-level `if` and `secrets` cannot.
+
+### Running it locally
+
+The workflow only supplies credentials; the build itself lives in scripts, so a
+release is reproducible on a developer Mac with the same commands CI runs
+(`progress.md` AC-4 — no CI-only wiring):
+
+```sh
+make release-version-test                # the tag parser's own tests
+make dmg VERSION=1.2.0 BUILD=1           # archive → export → signed dist/*.dmg
+make notarize                            # submit, staple, verify (needs an ASC key)
+make dmg SIGNING=none VERSION=0.0.0      # unsigned smoke build; no credentials
+```
+
+`make dmg` needs a `Developer ID Application` identity and a Developer ID
+provisioning profile for each of the three bundle ids. With no Xcode account
+signed in, `xcodebuild -exportArchive` fails with `No Accounts` / `No profiles for
+'com.owncloud.macos.fileprovider' were found`; sign in to Xcode, or pass an App
+Store Connect key (`ASC_KEY_PATH`, `ASC_KEY_ID`, `ASC_ISSUER_ID`) so automatic
+signing can mint them unattended, which is what CI does. `SIGNING=none` is the way
+to exercise everything up to that point without any of it — the same command the
+per-PR installer tier runs. Its artifact is named `-unsigned` and `dist/`
+records the mode, so `make notarize` refuses it rather than submitting an ad-hoc
+signed image to Apple.
+
+`make notarize` takes no `VERSION`: it reads the image's path from
+`dist/artifact-path.txt`, written by `make dmg`, so the two cannot disagree about
+the filename.
+
+### Signed commits and tags
+
+Commits are signed with SSH, not GPG — `gpg` is not installed here, and the key that
+already authenticates the push can sign as well:
+
+```sh
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/id_ed25519.pub
+git config commit.gpgsign true
+git config tag.gpgsign true
+```
+
+Tags matter more than commits in this repository: pushing a `v*` tag is what builds and
+publishes a notarized installer, so a signed tag is the only link between a person and
+the artifact a user downloads. An unsigned tag means the release provenance stops at
+"someone with push access".
+
+Two traps found while setting this up:
+
+- **Verifying locally needs `gpg.ssh.allowedSignersFile`.** Without it every
+  `git log --show-signature` reports `needs to be configured and exist`, which reads
+  like a broken signature rather than a missing local trust list. The file maps an email
+  to a public key; it lives in `.git/` (uncommitted) because it records who *this*
+  checkout trusts, not a project-wide fact.
+- **A rebase re-signs, and drops signatures it cannot reproduce.** Rewriting a commit
+  produces a new one, so a merge commit GitHub signed with its own key comes out
+  unsigned — the signature is over the commit object, and the object changed. Re-signing
+  is `git rebase -f <upstream>`, which preserves author name and date; check
+  `git diff <old> <new>` is empty afterwards to prove only the signature changed.
+
+Because `main` takes squash merges only, GitHub re-signs whatever lands there with its
+own key. Signing locally is therefore about the branch and the tag, not about `main`'s
+history.
+
+### Why a `.dmg`, and why `hdiutil`
+
+A `.pkg` would need a `Developer ID Installer` certificate, which this team does
+not have; the `.dmg` is signed with the `Developer ID Application` certificate
+that does exist. It is built with `hdiutil` rather than `create-dmg` because
+Homebrew image tooling is absent here and `hdiutil` ships with every macOS runner.
+
+The app is stapled **before** the image is built around it, so a user who drags
+the app out of the image onto another Mac still has a valid ticket offline. That
+is why `notarize.sh` rebuilds the `.dmg` rather than patching it.
+
+### Required repository secrets
+
+None of these exist yet; a release cannot run until they are configured. The
+unsigned tier needs none of them, which is why it is the half that is proven.
+
+| Secret | Contents |
+|---|---|
+| `MACOS_CERTIFICATE_P12` | base64 of the `Developer ID Application` `.p12` |
+| `MACOS_CERTIFICATE_PASSWORD` | its export password |
+| `KEYCHAIN_PASSWORD` | any value; unlocks the job's temporary keychain |
+| `APPLE_API_KEY_P8` | base64 of the App Store Connect `.p8` private key |
+| `APPLE_API_KEY_ID` | the key's ID |
+| `APPLE_API_ISSUER_ID` | the issuer UUID |
+
+And one repository **variable**:
+
+| Variable | Effect |
+|---|---|
+| `RELEASE_SIGNING_ENABLED` | `true` enables the rolling `main` build. Tags release regardless. |
+
+Setting it is the last step of enabling releases, and deliberately separate: the
+first signed run should be a push to `main` that can be watched and retried, not a
+tag someone is waiting on.
 
 ## Test harness (Task 1.4)
 
@@ -88,6 +288,14 @@ Docker on `ubuntu-latest` in CI (see `progress.md` AC-2, backend-contract tier).
   must run with the sandbox disabled in this environment.
 - `xcodebuild test` covers XCTest targets inside the Xcode project (added on the
   Mac once the project exists).
+- **Shell scripts: check them with `/bin/bash`, not `env bash`.** macOS ships
+  `/bin/bash` **3.2**, and that is what a GitHub macOS runner uses; a developer Mac
+  with Homebrew resolves `#!/usr/bin/env bash` to bash 5. The difference is not
+  academic — in 3.2, expanding an **empty** array under `set -u` fails with
+  `a[@]: unbound variable`, so code that is correct locally can fail only in CI.
+  Both `make-dmg.sh` and `release.yml` had exactly that bug (`progress.md` Task
+  9.7); the fix is to keep such arrays non-empty by leading with a flag that is
+  always wanted, rather than guarding every expansion with `${a[@]+"${a[@]}"}`.
 
 ## Why a generated project
 
