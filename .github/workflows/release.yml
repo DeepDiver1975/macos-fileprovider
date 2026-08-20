@@ -195,17 +195,20 @@ jobs:
           CHECKSUM: ${{ steps.artifact.outputs.checksum }}
         run: |
           set -euo pipefail
-          prerelease_flag=()
+          # --generate-notes gives the commit-derived changelog; anything more
+          # curated is edited on the release afterwards (out of scope here). It leads
+          # the array so the array is never empty: macOS /bin/bash is 3.2, where
+          # expanding an empty array under `set -u` fails with `unbound variable` —
+          # which here would have broken every *non*-prerelease release, the case
+          # this repo has never run. See progress.md Task 9.7.
+          flags=(--generate-notes)
           if [[ "$IS_PRERELEASE" == "true" ]]; then
-            prerelease_flag=(--prerelease)
+            flags+=(--prerelease)
           fi
 
-          # --generate-notes gives the commit-derived changelog; anything more
-          # curated is edited on the release afterwards (out of scope here).
           gh release create "$TAG" \
             --title "$TAG" \
-            --generate-notes \
-            "${prerelease_flag[@]}" \
+            "${flags[@]}" \
             "$DMG" "$CHECKSUM"
 
       # The rolling build's counterpart. One release replaced in place rather than one

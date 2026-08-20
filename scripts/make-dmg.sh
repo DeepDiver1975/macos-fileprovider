@@ -108,28 +108,41 @@ xcodegen generate
 # The version override on the command line outranks project.yml's development
 # defaults and reaches all three bundles, because every Info.plist references
 # $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION) rather than a literal.
-declare -a auth_flags=()
-if [[ -n "${ASC_KEY_PATH-}" ]]; then
-    auth_flags=(
-        -authenticationKeyPath "$ASC_KEY_PATH"
-        -authenticationKeyID "${ASC_KEY_ID:?ASC_KEY_ID required with ASC_KEY_PATH}"
-        -authenticationKeyIssuerID "${ASC_ISSUER_ID:?ASC_ISSUER_ID required with ASC_KEY_PATH}"
-    )
-fi
-
-# Signing flags. `-allowProvisioningUpdates` is deliberately absent when unsigned:
-# with automatic signing xcodebuild would go looking for Developer ID profiles, which
-# is precisely what an unsigned build exists to avoid needing. CODE_SIGN_STYLE=Manual
-# for the same reason.
-declare -a signing_flags=(-allowProvisioningUpdates)
+#
+# Signing flags first. `-allowProvisioningUpdates` is deliberately absent when
+# unsigned: with automatic signing xcodebuild would go looking for Developer ID
+# profiles, which is precisely what an unsigned build exists to avoid needing.
+# CODE_SIGN_STYLE=Manual for the same reason.
+#
+# The App Store Connect flags are *appended to the same array* rather than kept in
+# one of their own, so no array is ever expanded while it might be empty. macOS ships
+# /bin/bash 3.2, where `"${a[@]}"` on an empty array trips `set -u` with `a[@]:
+# unbound variable` — and `#!/usr/bin/env bash` finds bash 5 on a developer Mac with
+# Homebrew, so the failure only ever appears on a runner. Found exactly that way; see
+# progress.md Task 9.7.
+declare -a archive_flags=(-allowProvisioningUpdates)
 if [[ "$SIGNING" == "none" ]]; then
-    signing_flags=(
+    archive_flags=(
         CODE_SIGNING_ALLOWED=NO
         CODE_SIGNING_REQUIRED=NO
         CODE_SIGN_IDENTITY=""
         CODE_SIGN_ENTITLEMENTS=""
         CODE_SIGN_STYLE=Manual
     )
+fi
+
+# The credential flags, appended to both lists. Held in an array that always has the
+# export step's own -allowProvisioningUpdates as element 0, so it is never expanded
+# empty either; `[@]:1` takes just the credentials for the archive, which must not
+# receive that flag when unsigned.
+declare -a auth_flags=(-allowProvisioningUpdates)
+if [[ -n "${ASC_KEY_PATH-}" ]]; then
+    auth_flags+=(
+        -authenticationKeyPath "$ASC_KEY_PATH"
+        -authenticationKeyID "${ASC_KEY_ID:?ASC_KEY_ID required with ASC_KEY_PATH}"
+        -authenticationKeyIssuerID "${ASC_ISSUER_ID:?ASC_ISSUER_ID required with ASC_KEY_PATH}"
+    )
+    archive_flags+=("${auth_flags[@]:1}")
 fi
 
 echo "==> xcodebuild archive"
@@ -141,8 +154,7 @@ xcodebuild archive \
     -archivePath "$ARCHIVE_PATH" \
     MARKETING_VERSION="$VERSION" \
     CURRENT_PROJECT_VERSION="$BUILD" \
-    "${signing_flags[@]}" \
-    "${auth_flags[@]}"
+    "${archive_flags[@]}"
 
 readonly EXPORTED_APP="$EXPORT_DIR/$APP_NAME"
 
@@ -159,11 +171,11 @@ if [[ "$SIGNING" == "none" ]]; then
     cp -R "$ARCHIVE_PATH/Products/Applications/$APP_NAME" "$EXPORT_DIR/"
 else
     echo "==> xcodebuild -exportArchive"
+    # auth_flags leads with -allowProvisioningUpdates, so it is not repeated here.
     xcodebuild -exportArchive \
         -archivePath "$ARCHIVE_PATH" \
         -exportPath "$EXPORT_DIR" \
         -exportOptionsPlist scripts/ExportOptions.plist \
-        -allowProvisioningUpdates \
         "${auth_flags[@]}"
 fi
 

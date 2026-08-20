@@ -254,6 +254,14 @@ tag someone is waiting on.
   must run with the sandbox disabled in this environment.
 - `xcodebuild test` covers XCTest targets inside the Xcode project (added on the
   Mac once the project exists).
+- **Shell scripts: check them with `/bin/bash`, not `env bash`.** macOS ships
+  `/bin/bash` **3.2**, and that is what a GitHub macOS runner uses; a developer Mac
+  with Homebrew resolves `#!/usr/bin/env bash` to bash 5. The difference is not
+  academic — in 3.2, expanding an **empty** array under `set -u` fails with
+  `a[@]: unbound variable`, so code that is correct locally can fail only in CI.
+  Both `make-dmg.sh` and `release.yml` had exactly that bug (`progress.md` Task
+  9.7); the fix is to keep such arrays non-empty by leading with a flag that is
+  always wanted, rather than guarding every expansion with `${a[@]+"${a[@]}"}`.
 
 ## Why a generated project
 
