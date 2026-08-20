@@ -212,6 +212,40 @@ signed image to Apple.
 `dist/artifact-path.txt`, written by `make dmg`, so the two cannot disagree about
 the filename.
 
+### Signed commits and tags
+
+Commits are signed with SSH, not GPG — `gpg` is not installed here, and the key that
+already authenticates the push can sign as well:
+
+```sh
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/id_ed25519.pub
+git config commit.gpgsign true
+git config tag.gpgsign true
+```
+
+Tags matter more than commits in this repository: pushing a `v*` tag is what builds and
+publishes a notarized installer, so a signed tag is the only link between a person and
+the artifact a user downloads. An unsigned tag means the release provenance stops at
+"someone with push access".
+
+Two traps found while setting this up:
+
+- **Verifying locally needs `gpg.ssh.allowedSignersFile`.** Without it every
+  `git log --show-signature` reports `needs to be configured and exist`, which reads
+  like a broken signature rather than a missing local trust list. The file maps an email
+  to a public key; it lives in `.git/` (uncommitted) because it records who *this*
+  checkout trusts, not a project-wide fact.
+- **A rebase re-signs, and drops signatures it cannot reproduce.** Rewriting a commit
+  produces a new one, so a merge commit GitHub signed with its own key comes out
+  unsigned — the signature is over the commit object, and the object changed. Re-signing
+  is `git rebase -f <upstream>`, which preserves author name and date; check
+  `git diff <old> <new>` is empty afterwards to prove only the signature changed.
+
+Because `main` takes squash merges only, GitHub re-signs whatever lands there with its
+own key. Signing locally is therefore about the branch and the tag, not about `main`'s
+history.
+
 ### Why a `.dmg`, and why `hdiutil`
 
 A `.pkg` would need a `Developer ID Installer` certificate, which this team does
