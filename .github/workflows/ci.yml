@@ -1,9 +1,12 @@
-# AC-2 CI: three tiers (progress.md Task 6.5).
+# AC-2 CI: four tiers (progress.md Task 6.5, Task 9.7).
 #   1. Unit          — swift test (+ xcodebuild test on the Mac); every PR.
 #   2. Backend contract — core WebDAV/Graph clients vs. both backends in Docker
 #                      on ubuntu-latest; every PR.
 #   3. File Provider end-to-end — full domain/Finder behaviour on a macOS runner
 #                      with oCIS from its darwin-arm64 binary; nightly + label.
+#   4. Installer     — the release pipeline's build half, unsigned; every PR.
+#                      Exists so the release path is exercised continuously rather
+#                      than first running on a tag (Task 9.7).
 #
 # Third-party actions are pinned to full commit SHAs (AC-2). actions/checkout
 # v4.2.2 == 11bd719. Failing jobs upload diagnostics (AC-6).
@@ -113,3 +116,58 @@ jobs:
       # end-to-end tier here (AC-2 known gap).
       - name: Placeholder — end-to-end harness pending Task 6.0
         run: echo "End-to-end tier pending the Task 6.0 spike on a real macOS runner."
+
+  installer:
+    name: Installer (unsigned smoke build)
+    # Tier 4. Runs the release pipeline's build half — Release-configuration archive,
+    # version stamping, .dmg packaging — on every PR, so a defect in it surfaces here
+    # rather than the first time a tag depends on it (Task 9.7).
+    #
+    # No secrets, deliberately: SIGNING=none needs no certificate, no provisioning
+    # profile and no App Store Connect key, so this job also runs on fork PRs, where
+    # secrets are unavailable no matter what is configured. What it therefore cannot
+    # prove is everything behind a Developer ID signature — export, notarization,
+    # stapling. That half runs from release.yml (Task 9.8).
+    #
+    # The shipped entitlements are not checked here either: make-dmg.sh reads them from
+    # the code signature, and an unsigned .appex has none. ReleaseEntitlementsTests in
+    # the unit tier pins the declarations instead.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Self-test the tag -> version parser
+        # Seconds, and it is the one release step that needs no build at all — so a
+        # broken parser fails before twenty minutes of archiving.
+        run: make release-version-test
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build the unsigned installer
+        # VERSION=0.0.0 deliberately: a smoke build is not a release, and an About
+        # window reading `0.0.0 (1234)` says so unambiguously while still naming the
+        # run that produced it. BUILD is the run number, so CFBundleVersion increases.
+        run: make dmg SIGNING=none VERSION=0.0.0 BUILD=${{ github.run_number }}
+      - name: Upload the unsigned .dmg
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        with:
+          name: installer-unsigned
+          path: dist/*.dmg
+          # An image per PR run adds up, and its value is in being downloadable while
+          # the PR is open, not months later.
+          retention-days: 14
+      - name: Collect build diagnostics on failure (AC-6)
+        if: failure()
+        run: |
+          {
+            echo "--- dist/ ---"
+            ls -lR dist || echo "no dist/ directory"
+            echo "--- signing-mode.txt ---"
+            cat dist/signing-mode.txt 2>/dev/null || echo "absent (failed before packaging)"
+            echo "--- artifact-path.txt ---"
+            cat dist/artifact-path.txt 2>/dev/null || echo "absent (failed before packaging)"
+          } > installer-diagnostics.txt
+      - name: Upload diagnostics (AC-6)
+        if: failure()
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        with:
+          name: installer-diagnostics
+          path: installer-diagnostics.txt

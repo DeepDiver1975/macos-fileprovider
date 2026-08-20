@@ -1,9 +1,24 @@
-# Tag-triggered release: build, sign, notarize and publish the macOS installer.
+# Signed release: build, sign, notarize and publish the macOS installer.
 #
-# Pushing `v1.2.0` stamps 1.2.0 into the app and both File Provider extensions,
-# builds a notarized .dmg and attaches it to a GitHub release. `v1.2.0-rc.1`
-# publishes a prerelease instead; scripts/release-version.sh owns that split,
-# because Apple rejects a suffix in CFBundleShortVersionString.
+# Two triggers, one pipeline:
+#
+#   tag `v*`      the real thing. `v1.2.0` stamps 1.2.0 into the app and both File
+#                 Provider extensions, builds a notarized .dmg and attaches it to a
+#                 GitHub release. `v1.2.0-rc.1` publishes a prerelease instead;
+#                 scripts/release-version.sh owns that split, because Apple rejects a
+#                 suffix in CFBundleShortVersionString.
+#   push to main  a rolling `main-latest` prerelease, deleted and recreated each time
+#                 (Task 9.8). Its purpose is that the credentialed half of the release
+#                 — Developer ID signing, both notary submissions, stapling and
+#                 `gh release create` itself — runs continuously instead of for the
+#                 first time on a tag, when a defect is most expensive. CI's `installer`
+#                 tier covers the unsigned half on every PR (Task 9.7).
+#
+# The main trigger is gated on the `RELEASE_SIGNING_ENABLED` repository *variable*
+# because none of the secrets below exist yet: without the gate every push to main
+# would fail on the certificate import from now until they are configured. A variable
+# rather than a secret because `vars` can be read in a job-level `if` and `secrets`
+# cannot. Setting it to `true` is the last step of enabling releases.
 #
 # The real work lives in scripts/make-dmg.sh and scripts/notarize.sh so the same
 # commands run on a developer Mac (progress.md AC-4 — no CI-only wiring). This file
@@ -18,20 +33,34 @@
 #   APPLE_API_KEY_ID            the key's ID
 #   APPLE_API_ISSUER_ID         the issuer UUID
 #
+# Required repository variable:
+#   RELEASE_SIGNING_ENABLED     "true" enables the rolling main build (tags always run)
+#
 # See PROJECT.md "Releasing".
 name: Release
 
 on:
   push:
     tags: ["v*"]
+    branches: [main]
 
 # Needed by `gh release create`. Nothing else is granted.
 permissions:
   contents: write
 
+# Per-ref, so this can only ever cancel a superseded `main` build: every tag is its own
+# ref and so its own group. That matters — cancelling a run mid-notarization is fine for
+# a commit that has already been replaced on main, and never happens to a tagged release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   release:
     name: Build, notarize and publish
+    # A tag always releases. A push to main only does so once the credentials exist and
+    # someone has said so explicitly; see the header.
+    if: github.ref_type == 'tag' || vars.RELEASE_SIGNING_ENABLED == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -41,9 +70,26 @@ jobs:
       - name: Self-test the tag parser
         run: make release-version-test
 
-      - name: Derive the version from the tag
+      # release-version.sh only parses tags, and deliberately so: it rejects anything
+      # that is not vMAJOR.MINOR.PATCH rather than guessing. A main build has no version
+      # to derive, so its identity is assigned here instead — 0.0.0 marketing version,
+      # because a rolling build is not a release and About should say so, and
+      # `main-<sha7>` as the artifact name so a downloaded .dmg names the commit it came
+      # from. Always a prerelease.
+      - name: Derive the version
         id: version
-        run: ./scripts/release-version.sh "${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            ./scripts/release-version.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "marketing_version=0.0.0"
+              echo "full_version=main-${GITHUB_SHA:0:7}"
+              echo "is_prerelease=true"
+              echo "rolling=true"
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       # A release must not ship untested code. Same command as the CI unit tier.
       - name: swift test (core package)
@@ -140,6 +186,7 @@ jobs:
           cat "${dmg_path}.sha256"
 
       - name: Publish the GitHub release
+        if: steps.version.outputs.rolling != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -148,17 +195,55 @@ jobs:
           CHECKSUM: ${{ steps.artifact.outputs.checksum }}
         run: |
           set -euo pipefail
-          prerelease_flag=()
+          # --generate-notes gives the commit-derived changelog; anything more
+          # curated is edited on the release afterwards (out of scope here). It leads
+          # the array so the array is never empty: macOS /bin/bash is 3.2, where
+          # expanding an empty array under `set -u` fails with `unbound variable` —
+          # which here would have broken every *non*-prerelease release, the case
+          # this repo has never run. See progress.md Task 9.7.
+          flags=(--generate-notes)
           if [[ "$IS_PRERELEASE" == "true" ]]; then
-            prerelease_flag=(--prerelease)
+            flags+=(--prerelease)
           fi
 
-          # --generate-notes gives the commit-derived changelog; anything more
-          # curated is edited on the release afterwards (out of scope here).
           gh release create "$TAG" \
             --title "$TAG" \
-            --generate-notes \
-            "${prerelease_flag[@]}" \
+            "${flags[@]}" \
+            "$DMG" "$CHECKSUM"
+
+      # The rolling build's counterpart. One release replaced in place rather than one
+      # per commit, so `main-latest` is a stable URL and the release list stays readable.
+      #
+      # --cleanup-tag deletes the tag along with the release; without it the tag survives,
+      # `gh release create` refuses to move it, and every subsequent push publishes the
+      # first commit's image under the new commit's release. `main-latest` cannot
+      # re-trigger this workflow — the tag filter above is `v*`.
+      - name: Publish the rolling main prerelease
+        if: steps.version.outputs.rolling == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD: ${{ github.run_number }}
+          FULL_VERSION: ${{ steps.version.outputs.full_version }}
+          DMG: ${{ steps.artifact.outputs.dmg }}
+          CHECKSUM: ${{ steps.artifact.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          # `|| true`: there is nothing to delete on the first ever run, and a missing
+          # release is not a failure here.
+          gh release delete main-latest --yes --cleanup-tag || true
+
+          # A body rather than --generate-notes: the notes would be computed against the
+          # tag this step is about to create, so they would be empty. What a visitor
+          # needs to know instead is that this build is not a release.
+          gh release create main-latest \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "main (build $BUILD)" \
+            --notes "Rolling build of \`main\` — signed and notarized, but **not a release**: it has had no more testing than the commit it was built from, and it is replaced on every push.
+
+          Version \`$FULL_VERSION\`, build $BUILD, commit \`$GITHUB_SHA\`. The app reports \`0.0.0 ($BUILD)\` in its About window, which is how you can tell it apart from a tagged build.
+
+          For everyday use, download a tagged release instead." \
             "$DMG" "$CHECKSUM"
 
       # AC-6. Build and notary failures are otherwise invisible: xcodebuild's real

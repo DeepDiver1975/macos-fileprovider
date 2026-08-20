@@ -9,6 +9,7 @@
 #   make install                             # build + sign the app, install to ~/Applications
 #   make icons                               # regenerate the app icon from the ownCloud logo
 #   make dmg VERSION=1.2.0 BUILD=1           # build the signed release .dmg
+#   make dmg SIGNING=none VERSION=0.0.0      # unsigned smoke build (no certificate)
 #   make notarize                            # notarize + staple it (needs an ASC key)
 #   make release-version-test                # self-test the tag -> version parser
 #
@@ -93,6 +94,12 @@ install:
 # workflow run number so CFBundleVersion always increases.
 BUILD ?= 1
 
+# developer-id (the default) needs a certificate, a provisioning profile per bundle id
+# and — unattended — an App Store Connect key. SIGNING=none needs none of those and is
+# what the per-PR installer tier runs (Task 9.7); it skips export, the entitlements
+# check and image signing, and names its artifact `-unsigned`.
+SIGNING ?= developer-id
+
 # Self-test the tag -> version parser. Cheap, and it runs before any archive so a bad
 # tag fails in seconds.
 release-version-test:
@@ -101,7 +108,7 @@ release-version-test:
 # Build the signed .dmg. VERSION must be numeric (1.2.0) — the parser strips the tag's
 # `v` and any prerelease suffix, which Apple rejects in CFBundleShortVersionString.
 dmg:
-	VERSION="$(VERSION)" BUILD="$(BUILD)" ./scripts/make-dmg.sh
+	VERSION="$(VERSION)" BUILD="$(BUILD)" SIGNING="$(SIGNING)" ./scripts/make-dmg.sh
 
 # Notarize + staple the app and the image built by `make dmg`. Needs an App Store
 # Connect API key (ASC_KEY_PATH / ASC_KEY_ID / ASC_ISSUER_ID). No VERSION needed —
