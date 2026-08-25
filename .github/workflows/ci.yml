@@ -92,7 +92,7 @@ jobs:
         run: docker compose -f test/fixtures/${{ matrix.backend }}/docker-compose.yml logs > backend-logs.txt
       - name: Upload diagnostics (AC-6)
         if: failure()
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: backend-${{ matrix.backend }}-logs
           path: backend-logs.txt
@@ -147,7 +147,7 @@ jobs:
         # run that produced it. BUILD is the run number, so CFBundleVersion increases.
         run: make dmg SIGNING=none VERSION=0.0.0 BUILD=${{ github.run_number }}
       - name: Upload the unsigned .dmg
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-unsigned
           path: dist/*.dmg
@@ -167,7 +167,7 @@ jobs:
           } > installer-diagnostics.txt
       - name: Upload diagnostics (AC-6)
         if: failure()
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-diagnostics
           path: installer-diagnostics.txt
